@@ -1,0 +1,62 @@
+{
+  "name": "pi-wechat-ilink",
+  "version": "0.1.0",
+  "description": "Pi coding agent extension for the official WeChat iLink / ClawBot channel — remote chat, task completion notice, and dangerous command approval",
+  "type": "module",
+  "license": "MIT",
+  "author": "",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-coding-agent",
+    "wechat",
+    "weixin",
+    "ilink",
+    "clawbot",
+    "extension"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YOUR_GITHUB_USERNAME/pi-wechat-ilink.git"
+  },
+  "bugs": {
+    "url": "https://github.com/YOUR_GITHUB_USERNAME/pi-wechat-ilink/issues"
+  },
+  "homepage": "https://github.com/YOUR_GITHUB_USERNAME/pi-wechat-ilink#readme",
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "scripts": {
+    "check": "node --check src/index.ts || true",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run typecheck"
+  },
+  "dependencies": {
+    "@wechatbot/wechatbot": "^2.2.0",
+    "qrcode-terminal": "^0.12.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
