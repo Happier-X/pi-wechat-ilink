@@ -1,12 +1,12 @@
 # Backend Development Guidelines
 
-> Best practices for backend development in this project.
+> Best practices for backend development in this project (`pi-lark-hub`).
 
 ---
 
 ## Overview
 
-This directory contains guidelines for backend development. Fill in each file with your project's specific conventions.
+This directory contains guidelines for backend development of the multi-Pi Feishu hub and bridge.
 
 ---
 
@@ -16,7 +16,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 |-------|-------------|--------|
 | [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
 | [Database Guidelines](./database-guidelines.md) | ORM patterns, queries, migrations | To fill |
-| [Error Handling](./error-handling.md) | Login fail-closed, queue/reply errors, TUI-safe surfaces | Filled |
+| [Error Handling](./error-handling.md) | Hub/bridge errors, remote queue, fail-closed routing | Filled |
 | [Quality Guidelines](./quality-guidelines.md) | No followUp for remote tasks; no stdin/stderr TUI chrome | Filled |
 | [Multi-Pi Lark Hub](./multi-pi-lark-hub.md) | Hub/bridge protocol, routing, config, Feishu modes | Filled |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | To fill |
@@ -36,4 +36,4 @@ The goal is to help AI assistants and new team members understand how YOUR proje
 
 ---
 
-**Language**: All documentation should be written in **English**.
+**Language**: All documentation should be written in **English** (hub product docs may be Chinese).

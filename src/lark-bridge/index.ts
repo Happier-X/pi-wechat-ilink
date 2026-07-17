@@ -5,8 +5,9 @@
  * 上报 task_end / 危险 bash 审批 / 显式 need_reply。
  * 远程文本走扩展自有 FIFO，禁止 pi.sendUserMessage(..., { deliverAs: "followUp" })。
  *
- * 加载方式（不作为 package 默认扩展，避免与微信通道双开）：
- *   pi -e ./src/lark-bridge/index.ts
+ * 加载方式：
+ *   默认：package pi.extensions → src/index.ts（re-export 本模块）
+ *   显式：pi -e ./src/lark-bridge/index.ts
  *   或 pi -e <本包绝对路径>/src/lark-bridge/index.ts
  *
  * 命令：
@@ -36,7 +37,7 @@ const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
 const NEED_REPLY_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_NEED_REPLY_PROMPT = "需要你的回复";
 
-/** 与微信扩展一致的危险 bash 模式 */
+/** 危险 bash 模式（拦截后走 hub 审批 / 本机 UI） */
 const DANGEROUS_PATTERNS: RegExp[] = [
 	/\brm\s+(-[a-z]*r[a-z]*f[a-z]*|--recursive)/i,
 	/\bsudo\b/i,
@@ -490,7 +491,7 @@ export default function larkBridge(pi: ExtensionAPI) {
 		if (connected && piId) status(`飞书 Hub ✓ ${piId} · 执行中`);
 	});
 
-	// 与微信扩展一致：agent_end 可能后跟 retry/compaction，先缓存助手文本
+	// agent_end 可能后跟 retry/compaction，先缓存助手文本
 	pi.on("agent_end", async (event, ctx) => {
 		activeCtx = ctx;
 		const answer = finalAssistantText(

@@ -19,7 +19,7 @@ Pi B (lark-bridge) ──┼──► pi-lark-hub
 用户（curl / 飞书）──┘
 ```
 
-与微信扩展 `src/index.ts` **平行**；默认 `package.json` 只加载微信扩展，避免双通道同时抢远程控制。
+产品包 **`pi-lark-hub`**：默认 `package.json` 的 `pi.extensions` 加载 `src/index.ts`（re-export `lark-bridge`）。也可显式 `pi -e ./src/lark-bridge/index.ts`。
 
 ## 配置
 
@@ -166,7 +166,7 @@ curl -X POST http://127.0.0.1:8765/control/message ^
 ## 启动 Hub
 
 ```bash
-cd pi-wechat-ilink
+cd pi-lark-hub
 npm install
 npm run hub
 npx tsx src/hub/cli.ts --port 8765
@@ -229,7 +229,10 @@ curl -X POST http://127.0.0.1:8765/control/approval ^
 ## 加载 Bridge
 
 ```bash
-pi -e C:/code/pi-wechat-ilink/src/lark-bridge/index.ts
+# 默认扩展入口（install 本包后自动加载）
+pi -e ./src/index.ts
+# 或显式 bridge
+pi -e ./src/lark-bridge/index.ts
 ```
 
 | 变量 | 默认 |

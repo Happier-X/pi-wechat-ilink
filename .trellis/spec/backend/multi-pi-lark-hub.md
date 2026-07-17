@@ -1,7 +1,7 @@
 # Multi-Pi 飞书 Hub 合约
 
 > 本机 `pi-lark-hub` + `lark-bridge` 的可执行约定。  
-> 与微信 `pi-wechat-ilink` 扩展平行，默认不同时作为 package 唯一扩展加载。
+> 产品包名为 **`pi-lark-hub`**；默认扩展入口 `src/index.ts` re-export lark-bridge。
 
 ---
 
@@ -15,9 +15,9 @@
 
 不在本合约：
 
-- 微信 iLink 多实例
 - 云端多机 hub
 - 完整 interactive 卡片 JSON 工作流（当前审批出站可为文本 MVP）
+- 已移除的微信 iLink 通道（历史实现，不再维护）
 
 ---
 
@@ -28,7 +28,8 @@
 | 入口 | 说明 |
 |------|------|
 | `npm run hub` / `pi-lark-hub` | 启动 hub（`src/hub/cli.ts`） |
-| `pi -e ./src/lark-bridge/index.ts` | 加载 bridge（非 package 默认 extensions） |
+| `pi.extensions` → `./src/index.ts` | 默认加载 bridge（re-export） |
+| `pi -e ./src/lark-bridge/index.ts` | 显式加载 bridge（等价） |
 
 ### Loopback HTTP（仅 127.0.0.1）
 
@@ -117,7 +118,7 @@
 **Base**
 
 - console 模式单测全绿、无需飞书网络
-- 默认 package 只加载微信扩展；lark-bridge 显式 `-e`
+- 默认 package 扩展加载 lark-bridge（`src/index.ts` re-export）
 
 **Bad**
 
