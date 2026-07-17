@@ -41,9 +41,10 @@ pi-lark-hub/
     │   ├── router.ts         # 纯文本/列表/使用 路由决策
     │   ├── bindings.ts       # messageId → piId 绑定
     │   ├── approvals.ts      # 审批状态机（幂等/超时）
-    │   ├── control.ts        # POST /control/* 业务处理
+    │   ├── control.ts        # POST /control/* 业务处理（含配对优先鉴权）
+    │   ├── pairing.ts        # 短码配对会话（TTL / 用后即废）
     │   ├── feishu-transport.ts   # FeishuTransport 接口 + Console/Noop
-    │   ├── feishu-lark-cli.ts    # lark-cli 出站实现
+    │   ├── feishu-lark-cli.ts    # lark-cli 出站实现（setRecipient 热更新）
     │   ├── feishu-inbound.ts     # lark-cli event consume 入站
     │   ├── *.test.ts             # 与模块同目录的 node:test
     └── lark-bridge/
@@ -60,8 +61,8 @@ pi-lark-hub/
 
 ```text
 cli → config / server / feishu-*
-server → registry / router / bindings / approvals / control / protocol / feishu-transport
-control → router / bindings / approvals / registry
+server → registry / router / bindings / approvals / control / pairing / config / protocol / feishu-transport
+control → router / bindings / approvals / registry / pairing
 lark-bridge → protocol（+ Pi ExtensionAPI peer）
 protocol → （无业务依赖）
 ```

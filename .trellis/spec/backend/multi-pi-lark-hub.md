@@ -44,7 +44,14 @@
 
 ### WebSocket（Pi ↔ Hub）
 
-见 `src/protocol.ts`：`register` / `heartbeat` / `notify` / `unregister` ↔ `register_ok` / `notify_ack` / `user_message` / `approval_result` / `error`。
+见 `src/protocol.ts`：
+
+| 方向 | type |
+|------|------|
+| Pi→Hub | `register` / `heartbeat` / `notify` / `unregister` / **`pair_begin`** |
+| Hub→Pi | `register_ok` / `notify_ack` / `user_message` / `approval_result` / `error` / **`pair_challenge`** / **`pair_result`** |
+
+配对字段：`pair_challenge` → `{ code, expiresAt, ttlMs }`；`pair_result` → `{ ok, openId?, message }`。
 
 ### 配置
 
@@ -81,6 +88,19 @@
 | 关闭 | `PI_LARK_HUB_AUTOSTART=0` |
 | 失败诊断 | 超时/启动失败 notify 必须附 `hub.log` 路径 |
 
+### 本人短码配对（必须）
+
+| 步骤 | 行为 |
+|------|------|
+| 发起 | 仅 Pi 命令 `/lark-pair` → WS `pair_begin` |
+| 出码 | Hub `PairingStore`：6 位（去易混字符），TTL 5min，单活跃会话，用后即废 |
+| 展示 | Hub→Pi `pair_challenge`；bridge notify 中文口令模板 |
+| 入站口令 | 文本 `配对 <码>` 或 `pair <码>`（`parsePairCommand`） |
+| 鉴权顺序 | **配对口令先于白名单**；无会话/错码/过期/无 openId → 不改配置 |
+| 成功 | `allowedOpenIds=[open_id]`、`feishu.userId=open_id`、**删除 chatId**；`saveHubOwnerBinding` 落盘；热更新内存 allowlist；`LarkCliFeishuTransport.setRecipient`；WS `pair_result` |
+| 模拟 | `POST /control/message` 必须带 `openId` |
+| env | 文件绑定可被 `PI_LARK_*` 重启覆盖；回执须提示清理 env |
+
 ### 路由规则（必须）
 
 | 入站 | 行为 |
@@ -91,6 +111,7 @@
 | 纯文本 + 单在线 | 自动默认并投递 |
 | 纯文本 + 多在线无默认 | 不投递，返回列表 |
 | `列表` / `使用 <id\|名>` | hub 本地处理，不转发 Pi |
+| `配对` / `pair` + 码 | hub 本地配对，不转发 Pi |
 
 ### 远程文本 → Pi
 
@@ -101,8 +122,10 @@
 
 | mode | 出站 | 入站 | 白名单 |
 |------|------|------|--------|
-| `console` | 日志 + 合成 `console-` messageId | HTTP `/control/*` | 空数组可放行（开发） |
-| `lark-cli` | `lark-cli im +messages-send` | 可选 `event consume` + HTTP | **必须非空 allowlist**；必须配置 userId 或 chatId |
+| `console` | 日志 + 合成 `console-` messageId | HTTP `/control/*` | 空数组可放行（开发，`consoleAllowEmptyAllowlist`） |
+| `lark-cli` | `lark-cli im +messages-send`（可 bootstrap 无收件人构造，send 前须有 recipient） | 可选 `event consume` + HTTP | **空=bootstrap**：非配对消息拒绝；有名单则仅名单 + 须 userId/chatId |
+
+运行时 `isAuthorized`：**空名单 + 非 console → false**（配对分支已在 control 先处理）；**禁止** `allowed.size===0 → true` 用于 lark-cli。
 
 ---
 
@@ -111,9 +134,12 @@
 | 条件 | 结果 |
 |------|------|
 | host 非 loopback | 拒绝启动 |
-| lark-cli 无 allowlist | 拒绝启动 |
-| lark-cli 无 userId/chatId | 拒绝启动 |
-| 未授权 openId | `ok: false`，不投递 |
+| lark-cli 空白名单 | **允许启动**（bootstrap）；非配对入站拒绝 |
+| lark-cli 有名单无 userId/chatId | 拒绝启动（`missing_recipient`） |
+| lark-cli 空白名单无收件人 | 允许启动；出站 send 失败直到配对/`setRecipient` |
+| 未授权 openId | `ok: false`，不投递；提示 `/lark-pair` |
+| 配对无会话/错码/过期/无 openId | 回执失败原因；配置不变 |
+| 配对成功 | 单主人落盘 + 热更新；可换绑覆盖 |
 | 审批重复决策且已投递 Pi | `already_handled`，不二次执行 |
 | 审批 terminal 但投递失败 | 可同决策重试，不改决策 |
 | need_reply 超时 | bridge 本地超时；不启发式猜答案 |
@@ -128,17 +154,20 @@
 - 两 Pi 在线；审批 A 的 requestId 只回 A
 - 回复 `console-xxx` / `om_xxx` 只进绑定 pi
 - `/lark-ask` 后仅 `reply`+匹配 requestId 才 resolve
+- `/lark-pair` → 飞书/control「配对 CODE」→ 仅主人 open_id 在白名单且 userId 为本人
 
 **Base**
 
 - console 模式单测全绿、无需飞书网络
 - 默认 package 扩展加载 lark-bridge（`src/index.ts` re-export）
+- lark-cli 空白名单可启动并完成配对 bootstrap
 
 **Bad**
 
 - 多 Pi 无默认时静默投给「第一个」
 - 用 followUp 投递飞书文本
-- lark-cli 模式空白名单启动
+- lark-cli 空白名单时放行所有非配对消息（`allowed.size===0 → true`）
+- 配对在白名单之后处理导致首次无法绑定
 - 把模型带 `?` 的回复自动当 need_reply
 
 ---
@@ -150,8 +179,9 @@
 | 默认路由单在线/歧义/使用 | `src/hub/router.test.ts` |
 | 绑定回复 / 离线 fail-closed | 同上 |
 | 审批幂等与 failed_delivery 重试 | 同上 |
-| 配置合并与 lark-cli 校验 | `src/hub/config.test.ts` |
-| lark-cli 出站解析（mock spawn） | `src/hub/feishu-lark-cli.test.ts` |
+| 配对优先白名单 / 错码不落盘 | 同上 + `src/hub/pairing.test.ts` |
+| 配置合并、bootstrap、saveHubOwnerBinding | `src/hub/config.test.ts` |
+| lark-cli 出站解析 / 无收件人 send 失败 | `src/hub/feishu-lark-cli.test.ts` |
 | `npm run typecheck` | CI/本地必跑 |
 
 ---
@@ -166,3 +196,9 @@
 
 **Wrong：** `event: need_reply` 来自正则扫 assistant 文本  
 **Correct：** 仅 `/lark-ask` 或未来显式桥接 API
+
+**Wrong：** lark-cli 空白名单 `isAuthorized` 返回 true  
+**Correct：** 空名单默认 false；`handleControlMessage` 先处理配对口令再 auth
+
+**Wrong：** 配对成功仍保留 `chatId` 出站群  
+**Correct：** 强制 `userId=open_id` 并删除 `chatId`

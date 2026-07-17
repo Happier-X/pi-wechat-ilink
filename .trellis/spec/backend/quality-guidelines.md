@@ -19,7 +19,8 @@ This package is a **Pi coding-agent extension** for multi-Pi Feishu remote contr
 | Multi-line `process.stderr.write` / `console.log` for banners in TUI mode | Alternate-screen TUI gets dirty; text can appear to “sit in” the input area. Use `ctx.ui.setWidget` / `notify` / `setStatus`. |
 | Overwriting the remote reply slot while a remote run is already owned | Races between `agent_end`→`agent_settled` and new inbound messages lose or cross replies. Treat slot-busy as busy and enqueue. |
 | Multi-Pi remote text without a hub route id | Must go through `pi-lark-hub` registration + default/reply/approval routing; never assume “the only Pi”. |
-| Starting `lark-cli` Feishu mode with empty allowlist | Forbidden; only `console` mode may allow empty allowlist for local tests. |
+| lark-cli 空白名单时对**非配对**消息放行（`allowed.size===0 → true`） | 安全漏洞；空名单仅 bootstrap：配对口令可过，其它拒绝。console 开发空名单放行仍可。 |
+| 配对鉴权放在白名单之后 | 首次无人在名单无法绑定 |
 
 ---
 
@@ -38,7 +39,7 @@ This package is a **Pi coding-agent extension** for multi-Pi Feishu remote contr
 ## Testing Requirements
 
 - Minimum: `npm run typecheck`.
-- Hub unit tests: `npm test` (`router` / `config` / `feishu-lark-cli` mocks).
+- Hub unit tests: `npm test`（`router` / `config` / `pairing` / `feishu-lark-cli` / `hub-autostart`）。
 - Prefer manual TUI smoke for queue/abort/approval/need_reply until more automated tests exist.
 - Future unit tests should cover: enqueue when slot busy; drain order; no `deliverAs` on remote paths.
 
