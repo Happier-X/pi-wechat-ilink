@@ -59,6 +59,21 @@ Hub 日志是 **单行前缀文本**，不是 JSON structured logger，也没有
 
 ---
 
+## 自动拉起的 Hub 子进程日志
+
+Bridge 以 detached 方式 spawn Hub 时：
+
+| 项 | 约定 |
+|----|------|
+| 路径 | `~/.pi/lark-hub/hub.log`（`defaultHubLogPath()`） |
+| 内容 | Hub `console.log` / `console.error`（配置摘要、启动失败等） |
+| TUI | **禁止**把 hub 子进程 stdio 接到 Pi 终端；stdin ignore，stdout/stderr 写文件 |
+| 失败提示 | Bridge `notify` 附日志路径，便于用户打开文件排查（如缺 tsx） |
+
+手动前台 `npm run hub` 仍走终端 stdout/stderr，与上表无关。
+
+---
+
 ## Bridge（TUI）反馈
 
 ### 机制

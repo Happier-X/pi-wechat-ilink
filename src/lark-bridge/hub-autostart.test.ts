@@ -7,6 +7,7 @@ import path from "node:path";
 import { describe, it, beforeEach } from "node:test";
 import { pathToFileURL } from "node:url";
 import {
+	defaultHubLogPath,
 	ensureHubRunning,
 	hubUrlToHttpOrigin,
 	isAutostartEnabled,
@@ -14,6 +15,9 @@ import {
 	resolveHubSpawnSpec,
 	resolvePackageRoot,
 } from "./hub-autostart.js";
+
+const okSpawn = (logPath = "/tmp/hub-test.log") =>
+	({ ok: true as const, logPath });
 
 describe("isAutostartEnabled", () => {
 	it("默认开启（未设置）", () => {
@@ -84,15 +88,20 @@ describe("ensureHubRunning", () => {
 		resetAutostartCooldownState();
 	});
 
+	it("defaultHubLogPath 指向 ~/.pi/lark-hub/hub.log", () => {
+		const p = defaultHubLogPath("/home/user");
+		assert.ok(p.replace(/\\/g, "/").endsWith(".pi/lark-hub/hub.log"));
+	});
+
 	it("autostart 关闭时 skipped 且不 spawn", async () => {
 		let spawned = 0;
 		const r = await ensureHubRunning({
 			env: { PI_LARK_HUB_AUTOSTART: "0" },
 			hubWsUrl: "ws://127.0.0.1:8765",
 			probe: async () => false,
-			spawnFn: () => {
+			spawnFn: (_spec, logPath) => {
 				spawned++;
-				return { ok: true };
+				return okSpawn(logPath);
 			},
 		});
 		assert.equal(r.status, "skipped");
@@ -106,9 +115,9 @@ describe("ensureHubRunning", () => {
 			env: {},
 			hubWsUrl: "ws://10.0.0.1:8765",
 			probe: async () => false,
-			spawnFn: () => {
+			spawnFn: (_spec, logPath) => {
 				spawned++;
-				return { ok: true };
+				return okSpawn(logPath);
 			},
 		});
 		assert.equal(r.status, "skipped");
@@ -121,9 +130,9 @@ describe("ensureHubRunning", () => {
 			env: {},
 			hubWsUrl: "ws://127.0.0.1:8765",
 			probe: async () => true,
-			spawnFn: () => {
+			spawnFn: (_spec, logPath) => {
 				spawned++;
-				return { ok: true };
+				return okSpawn(logPath);
 			},
 		});
 		assert.equal(r.status, "ready");
@@ -137,6 +146,7 @@ describe("ensureHubRunning", () => {
 		const r = await ensureHubRunning({
 			env: {},
 			hubWsUrl: "ws://127.0.0.1:8765",
+			logPath: "C:/tmp/hub-autostart-test.log",
 			probeTimeoutMs: 50,
 			readyTimeoutMs: 2_000,
 			pollIntervalMs: 100,
@@ -144,9 +154,9 @@ describe("ensureHubRunning", () => {
 				probes++;
 				return probes > 1;
 			},
-			spawnFn: () => {
+			spawnFn: (_spec, logPath) => {
 				spawned++;
-				return { ok: true };
+				return okSpawn(logPath);
 			},
 			sleep: async (ms) => {
 				clock += ms;
@@ -155,6 +165,29 @@ describe("ensureHubRunning", () => {
 		});
 		assert.equal(r.status, "spawned-ready");
 		assert.equal(spawned, 1);
+		assert.match(r.detail ?? "", /hub-autostart-test\.log/);
+	});
+
+	it("超时失败文案包含日志路径", async () => {
+		let clock = 1_000_000;
+		const r = await ensureHubRunning({
+			env: {},
+			hubWsUrl: "ws://127.0.0.1:8765",
+			logPath: "C:/tmp/hub-timeout.log",
+			cooldownMs: 30_000,
+			probeTimeoutMs: 50,
+			readyTimeoutMs: 300,
+			pollIntervalMs: 100,
+			probe: async () => false,
+			spawnFn: (_spec, logPath) => okSpawn(logPath),
+			sleep: async (ms) => {
+				clock += ms;
+			},
+			now: () => clock,
+		});
+		assert.equal(r.status, "failed");
+		assert.match(r.detail ?? "", /hub-timeout\.log/);
+		assert.match(r.detail ?? "", /tsx/);
 	});
 
 	it("冷却内第二次不 spawn", async () => {
@@ -163,14 +196,15 @@ describe("ensureHubRunning", () => {
 		const opts = {
 			env: {} as NodeJS.ProcessEnv,
 			hubWsUrl: "ws://127.0.0.1:8765",
+			logPath: "C:/tmp/hub-cool.log",
 			cooldownMs: 30_000,
 			probeTimeoutMs: 50,
 			readyTimeoutMs: 300,
 			pollIntervalMs: 100,
 			probe: async () => false,
-			spawnFn: (): { ok: true } | { ok: false; error: string } => {
+			spawnFn: (_spec: unknown, logPath: string) => {
 				spawned++;
-				return { ok: true as const };
+				return okSpawn(logPath);
 			},
 			sleep: async (ms: number) => {
 				clock += ms;

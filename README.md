@@ -116,8 +116,11 @@ pi -e ./src/index.ts
 | 生命周期 | **常驻**：关掉 Pi **不会**停止 Hub |
 | 崩溃自愈 | Hub 被杀后，bridge 重连时在冷却（约 30s）后可再拉起 |
 | 非本机 URL | `PI_LARK_HUB_URL` 非 127.0.0.1/localhost 时不自动 spawn |
+| 自动启动日志 | `~/.pi/lark-hub/hub.log`（失败/超时时 notify 会附路径） |
 | 手动启动（调试） | 包目录 `npm install && npm run hub` |
 | 手动停止 | 结束占用 `8765` 的 node 进程（任务管理器 / `Get-NetTCPConnection` 等） |
+
+> **说明**：Hub 入口依赖运行时包 `tsx`（已在 `dependencies`）。GitHub `pi install` 会装生产依赖；若仍提示缺 tsx，在包安装目录执行 `npm install` 或 `pi update https://github.com/Happier-X/pi-lark-hub`。
 
 Hub **仅监听 `127.0.0.1`**（默认端口 `8765`）。
 

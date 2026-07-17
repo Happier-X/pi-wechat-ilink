@@ -74,10 +74,12 @@
 |------|------|
 | 触发 | `session_start` / 断线重连前 `ensureHubRunning`（`src/lark-bridge/hub-autostart.ts`） |
 | 探测 | `GET http://127.0.0.1:<port>/health` 且 `ok===true` → 不 spawn |
-| 范围 | 仅 loopback URL；stdio `ignore` + detached，不污染 TUI |
+| 范围 | 仅 loopback URL；detached + `windowsHide`；子进程 stdout/stderr → `~/.pi/lark-hub/hub.log`（不污染 TUI） |
+| 运行时依赖 | `tsx` 必须在 **dependencies**（`scripts/pi-lark-hub.mjs` 运行时 resolve）；不可只放 devDependencies |
 | 冷却 | 每 bridge 进程约 30s 内最多一次 spawn 尝试 |
 | 生命周期 | Pi/`session_shutdown` **不**杀 Hub（常驻） |
 | 关闭 | `PI_LARK_HUB_AUTOSTART=0` |
+| 失败诊断 | 超时/启动失败 notify 必须附 `hub.log` 路径 |
 
 ### 路由规则（必须）
 

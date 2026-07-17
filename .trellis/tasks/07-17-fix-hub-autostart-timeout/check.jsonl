@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/multi-pi-lark-hub.md", "reason": "检查自动拉起合约与 Git 安装兼容"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "检查日志文件与 TUI 隔离"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "检查失败可诊断性"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "全量质量检查"}

@@ -1,12 +1,19 @@
 /**
  * Bridge 侧本机 Hub 自动拉起：探测 /health → 可选 spawn → 轮询就绪。
- * 仅 loopback；stdio ignore，不污染 Pi TUI。
+ * 仅 loopback；子进程日志写入 ~/.pi/lark-hub/hub.log，不污染 Pi TUI。
  */
 
 import { spawn, type SpawnOptions } from "node:child_process";
 import { createRequire } from "node:module";
-import { existsSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	openSync,
+	closeSync,
+	appendFileSync,
+} from "node:fs";
 import http from "node:http";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -40,12 +47,17 @@ export type EnsureHubRunningOptions = {
 	pollIntervalMs?: number;
 	/** 解析包根用的模块 URL，默认 import.meta.url */
 	moduleUrl?: string;
+	/** Hub 子进程日志路径（默认 ~/.pi/lark-hub/hub.log） */
+	logPath?: string;
 	/** 可注入时钟（测试） */
 	now?: () => number;
 	/** 可注入探测（测试） */
 	probe?: (httpOrigin: string, timeoutMs: number) => Promise<boolean>;
 	/** 可注入 spawn（测试） */
-	spawnFn?: (spec: HubSpawnSpec) => { ok: true } | { ok: false; error: string };
+	spawnFn?: (
+		spec: HubSpawnSpec,
+		logPath: string,
+	) => { ok: true; logPath: string } | { ok: false; error: string; logPath?: string };
 	/** 可注入 sleep（测试） */
 	sleep?: (ms: number) => Promise<void>;
 };
@@ -97,16 +109,39 @@ export function hubUrlToHttpOrigin(wsUrl: string): string | null {
 	}
 }
 
+export function defaultHubLogPath(home = os.homedir()): string {
+	return path.join(home, ".pi", "lark-hub", "hub.log");
+}
+
 export function resolvePackageRoot(fromUrl: string = import.meta.url): string {
 	// .../src/lark-bridge/xxx → package root
 	const dir = path.dirname(fileURLToPath(fromUrl));
 	return path.resolve(dir, "..", "..");
 }
 
+function resolveTsxCli(packageRoot: string): string | null {
+	try {
+		const require = createRequire(path.join(packageRoot, "package.json"));
+		return require.resolve("tsx/cli");
+	} catch {
+		return null;
+	}
+}
+
 export function resolveHubSpawnSpec(
 	packageRoot: string,
 ): HubSpawnSpec | { error: string } {
 	const mjs = path.join(packageRoot, "scripts", "pi-lark-hub.mjs");
+	const cliTs = path.join(packageRoot, "src", "hub", "cli.ts");
+	const tsxCli = resolveTsxCli(packageRoot);
+
+	if (!tsxCli) {
+		return {
+			error:
+				"未找到运行时依赖 tsx（scripts/pi-lark-hub.mjs 需要它）。请在 pi-lark-hub 包目录执行 npm install，或 pi update 后重装本包。",
+		};
+	}
+
 	if (existsSync(mjs)) {
 		return {
 			command: process.execPath,
@@ -115,27 +150,17 @@ export function resolveHubSpawnSpec(
 		};
 	}
 
-	const cliTs = path.join(packageRoot, "src", "hub", "cli.ts");
 	if (!existsSync(cliTs)) {
 		return {
 			error: `未找到 hub 入口（期望 ${mjs} 或 ${cliTs}）`,
 		};
 	}
 
-	try {
-		const require = createRequire(path.join(packageRoot, "package.json"));
-		const tsxCli = require.resolve("tsx/cli");
-		return {
-			command: process.execPath,
-			args: [tsxCli, cliTs],
-			cwd: packageRoot,
-		};
-	} catch {
-		return {
-			error:
-				"未找到 tsx。请在 pi-lark-hub 包目录执行 npm install 后重试（Pi 的 git install 一般会自动安装依赖）。",
-		};
-	}
+	return {
+		command: process.execPath,
+		args: [tsxCli, cliTs],
+		cwd: packageRoot,
+	};
 }
 
 export function probeHubHealth(
@@ -169,27 +194,69 @@ export function probeHubHealth(
 	});
 }
 
+function ensureLogFile(logPath: string): { fd: number } | { error: string } {
+	try {
+		mkdirSync(path.dirname(logPath), { recursive: true });
+		const stamp = new Date().toISOString();
+		appendFileSync(
+			logPath,
+			`\n----- pi-lark-hub autostart ${stamp} -----\n`,
+			"utf8",
+		);
+		const fd = openSync(logPath, "a");
+		return { fd };
+	} catch (error) {
+		return {
+			error: error instanceof Error ? error.message : String(error),
+		};
+	}
+}
+
 export function spawnHubDetached(
 	spec: HubSpawnSpec,
-): { ok: true } | { ok: false; error: string } {
+	logPath: string = defaultHubLogPath(),
+): { ok: true; logPath: string } | { ok: false; error: string; logPath?: string } {
+	const opened = ensureLogFile(logPath);
+	if ("error" in opened) {
+		return {
+			ok: false,
+			error: `无法写入 Hub 日志 ${logPath}：${opened.error}`,
+			logPath,
+		};
+	}
+
+	const { fd } = opened;
 	try {
 		const opts: SpawnOptions = {
 			cwd: spec.cwd,
 			detached: true,
-			stdio: "ignore",
+			// stdin ignore；stdout/stderr 进 hub.log，避免污染 TUI
+			stdio: ["ignore", fd, fd],
 			env: process.env,
 			windowsHide: true,
 		};
 		const child = spawn(spec.command, spec.args, opts);
+		// 父进程不再持有 fd；子进程继续写日志
+		try {
+			closeSync(fd);
+		} catch {
+			// ignore
+		}
 		child.unref();
 		child.on("error", () => {
-			// detached 后错误难向上抛；ensure 靠 health 超时反映
+			// detached 后错误难向上抛；ensure 靠 health + 日志
 		});
-		return { ok: true };
+		return { ok: true, logPath };
 	} catch (error) {
+		try {
+			closeSync(fd);
+		} catch {
+			// ignore
+		}
 		return {
 			ok: false,
 			error: error instanceof Error ? error.message : String(error),
+			logPath,
 		};
 	}
 }
@@ -215,6 +282,7 @@ export async function ensureHubRunning(
 	const spawnFn = options.spawnFn ?? spawnHubDetached;
 	const sleep = options.sleep ?? defaultSleep;
 	const moduleUrl = options.moduleUrl ?? import.meta.url;
+	const logPath = options.logPath ?? defaultHubLogPath();
 
 	if (!isAutostartEnabled(env)) {
 		return {
@@ -250,34 +318,44 @@ export async function ensureHubRunning(
 	const packageRoot = resolvePackageRoot(moduleUrl);
 	const specOrErr = resolveHubSpawnSpec(packageRoot);
 	if ("error" in specOrErr) {
-		return { status: "failed", detail: specOrErr.error };
-	}
-
-	lastSpawnAttemptAt = t;
-	const spawned = spawnFn(specOrErr);
-	if (!spawned.ok) {
 		return {
 			status: "failed",
-			detail: `启动 Hub 进程失败：${spawned.error}`,
+			detail: `${specOrErr.error} 日志：${logPath}`,
 		};
 	}
 
+	lastSpawnAttemptAt = t;
+	const spawned = spawnFn(specOrErr, logPath);
+	if (!spawned.ok) {
+		return {
+			status: "failed",
+			detail: `启动 Hub 进程失败：${spawned.error}${spawned.logPath ? ` 日志：${spawned.logPath}` : ""}`,
+		};
+	}
+
+	const usedLog = spawned.logPath ?? logPath;
 	const deadline = t + readyTimeoutMs;
 	while (now() < deadline) {
 		if (await probe(httpOrigin, probeTimeoutMs)) {
-			return { status: "spawned-ready", detail: "已自动启动本机 Hub" };
+			return {
+				status: "spawned-ready",
+				detail: `已自动启动本机 Hub（日志：${usedLog}）`,
+			};
 		}
 		await sleep(pollIntervalMs);
 	}
 
 	// 最后一次探测
 	if (await probe(httpOrigin, probeTimeoutMs)) {
-		return { status: "spawned-ready", detail: "已自动启动本机 Hub" };
+		return {
+			status: "spawned-ready",
+			detail: `已自动启动本机 Hub（日志：${usedLog}）`,
+		};
 	}
 
 	return {
 		status: "failed",
 		detail:
-			`自动启动 Hub 超时（${httpOrigin}）。可检查：包目录依赖是否完整（npm install）、端口是否被其它程序占用；也可手动在包目录执行 npm run hub。关闭自动拉起：PI_LARK_HUB_AUTOSTART=0`,
+			`自动启动 Hub 超时（${httpOrigin}）。请查看日志：${usedLog}。常见原因：包依赖未装全（需含生产依赖 tsx）、端口被占用。也可在包目录手动 npm install && npm run hub。关闭自动拉起：PI_LARK_HUB_AUTOSTART=0`,
 	};
 }

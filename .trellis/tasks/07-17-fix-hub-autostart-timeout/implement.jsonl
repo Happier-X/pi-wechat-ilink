@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/multi-pi-lark-hub.md", "reason": "自动拉起与 Git 安装合约"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "detached Hub 日志不能污染 TUI，需记录文件日志约定"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "自动启动失败需给出可诊断路径"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "typecheck/test 与 TUI 安全约束"}

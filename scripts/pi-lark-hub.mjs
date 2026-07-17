@@ -25,7 +25,7 @@ const args = process.argv.slice(2);
 
 if (!tsxCli) {
 	console.error(
-		"[pi-lark-hub] 未找到 tsx。请在包根目录执行 npm install，或使用: npx tsx src/hub/cli.ts",
+		"[pi-lark-hub] 未找到运行时依赖 tsx。请在包根目录执行 npm install（tsx 为 dependencies），或: npx tsx src/hub/cli.ts",
 	);
 	process.exit(1);
 }
