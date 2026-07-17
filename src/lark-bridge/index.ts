@@ -27,6 +27,11 @@ import {
 	type PiToHubMessage,
 	type UserMessage,
 } from "../protocol.js";
+import {
+	ensureHubRunning,
+	isAutostartEnabled,
+	type EnsureHubResult,
+} from "./hub-autostart.js";
 
 const STATUS_KEY = "lark-bridge";
 const DEFAULT_HUB_URL = process.env.PI_LARK_HUB_URL ?? "ws://127.0.0.1:8765";
@@ -123,6 +128,8 @@ export default function larkBridge(pi: ExtensionAPI) {
 	let piId: string | null = null;
 	let connected = false;
 	let hubDownNotified = false;
+	let autostartFailureNotified = false;
+	let lastEnsureResult: EnsureHubResult | null = null;
 	let intentionalClose = false;
 	let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 	let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -310,6 +317,7 @@ export default function larkBridge(pi: ExtensionAPI) {
 				piId = msg.piId;
 				connected = true;
 				hubDownNotified = false;
+				autostartFailureNotified = false;
 				status(`飞书 Hub ✓ ${piId}`);
 				notify(`已注册到 pi-lark-hub\npiId: ${piId}`, "info");
 				startHeartbeat();
@@ -350,8 +358,45 @@ export default function larkBridge(pi: ExtensionAPI) {
 		if (intentionalClose || reconnectTimer) return;
 		reconnectTimer = setTimeout(() => {
 			reconnectTimer = null;
-			if (activeCtx && !intentionalClose) connectHub(activeCtx);
+			if (activeCtx && !intentionalClose) {
+				void connectHubWithEnsure(activeCtx);
+			}
 		}, RECONNECT_MS);
+	};
+
+	/** 先 ensure（冷却内可能 skip spawn），再连 WS */
+	const connectHubWithEnsure = async (ctx: ExtensionContext) => {
+		activeCtx = ctx;
+		if (intentionalClose) return;
+
+		if (
+			socket &&
+			(socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)
+		) {
+			return;
+		}
+
+		status("飞书 Hub 准备中…");
+		const result = await ensureHubRunning({ hubWsUrl: DEFAULT_HUB_URL });
+		lastEnsureResult = result;
+		if (intentionalClose) return;
+
+		if (result.status === "spawned-ready") {
+			autostartFailureNotified = false;
+			notify(result.detail ?? "已自动启动本机 Hub", "info");
+		} else if (result.status === "ready") {
+			autostartFailureNotified = false;
+		} else if (result.status === "failed") {
+			// 与通用断线提示分开去重：Hub 崩溃后的首次重启失败也必须给出可操作原因。
+			if (!autostartFailureNotified) {
+				autostartFailureNotified = true;
+				hubDownNotified = true;
+				notify(result.detail ?? "自动启动 Hub 失败", "warning");
+			}
+			status("飞书 Hub 不可用");
+		}
+
+		connectHub(ctx);
 	};
 
 	const connectHub = (ctx: ExtensionContext) => {
@@ -376,7 +421,7 @@ export default function larkBridge(pi: ExtensionAPI) {
 			if (!hubDownNotified) {
 				hubDownNotified = true;
 				notify(
-					`无法连接 pi-lark-hub（${DEFAULT_HUB_URL}）：${error instanceof Error ? error.message : String(error)}。本机可继续使用；请先启动 hub。`,
+					`无法连接 pi-lark-hub（${DEFAULT_HUB_URL}）：${error instanceof Error ? error.message : String(error)}。本机可继续使用；将自动重试。`,
 					"warning",
 				);
 			}
@@ -427,10 +472,12 @@ export default function larkBridge(pi: ExtensionAPI) {
 			// close 会随后触发；此处避免未处理 error 崩溃（AC9）
 			if (!hubDownNotified) {
 				hubDownNotified = true;
-				notify(
-					`pi-lark-hub 连接失败（${DEFAULT_HUB_URL}）。请确认已启动：npm run hub`,
-					"warning",
-				);
+				const hint = !isAutostartEnabled()
+					? `已关闭自动拉起（PI_LARK_HUB_AUTOSTART=0）。请手动启动：在包目录 npm run hub。`
+					: lastEnsureResult?.status === "skipped" && lastEnsureResult.detail
+						? `${lastEnsureResult.detail}；将仅重试连接。`
+						: `将自动重试并尝试拉起本机 Hub（可设 PI_LARK_HUB_AUTOSTART=0 关闭）。也可手动在包目录执行 npm run hub。`;
+				notify(`pi-lark-hub 连接失败（${DEFAULT_HUB_URL}）。${hint}`, "warning");
 			}
 			status("飞书 Hub 不可用");
 		});
@@ -455,8 +502,8 @@ export default function larkBridge(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		activeCtx = ctx;
-		// hub 不可用时不崩溃，仅提示（AC9）
-		connectHub(ctx);
+		// hub 不可用时不崩溃；默认尝试自动拉起本机 Hub（AC9 + autostart）
+		await connectHubWithEnsure(ctx);
 	});
 
 	pi.on("session_shutdown", async () => {
@@ -708,7 +755,7 @@ export default function larkBridge(pi: ExtensionAPI) {
 					}
 				}
 				notify(
-					"pi-lark-hub 不可用且无本机 UI，无法完成 need_reply。请先启动 hub（npm run hub）。",
+					"pi-lark-hub 不可用且无本机 UI，无法完成 need_reply。请确认 Hub 已自动拉起或手动在包目录 npm run hub。",
 					"error",
 				);
 				return;

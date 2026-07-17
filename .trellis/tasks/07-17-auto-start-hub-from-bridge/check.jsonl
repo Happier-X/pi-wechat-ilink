@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/multi-pi-lark-hub.md", "reason": "核对 autostart 不破坏路由/loopback/飞书 mode"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "核对无 TUI 污染、无错误 followUp"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "核对失败路径与文案"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "核对用户可见反馈层级"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "核对 hasUI/notify 守卫"}

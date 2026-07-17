@@ -90,36 +90,36 @@ pi -e ./src/lark-bridge/index.ts
 
 ## 快速开始
 
-### 1. 启动 Hub
+### 1. 加载 Bridge（默认自动拉起 Hub）
 
-Hub 是**本机守护进程**，与 Pi 扩展分开运行。在仓库目录：
+`pi install` 之后打开 Pi 即可：lark-bridge 在连接 `ws://127.0.0.1:8765` 失败时会**自动在本机拉起** `pi-lark-hub`（loopback），无需每次手敲 `npm run hub`。
 
-```bash
-git clone https://github.com/Happier-X/pi-lark-hub.git
-cd pi-lark-hub
-npm install          # 装依赖（Node 库），不是 pi install
-npm run hub
-# 或：npx pi-lark-hub / node scripts/pi-lark-hub.mjs
-```
-
-Hub **仅监听 `127.0.0.1`**（默认端口 `8765`）。
-
-> `pi install https://github.com/...` 负责把 **Bridge 扩展** 挂进 Pi；**Hub 仍需** 在本机另开终端按上式启动。
-
-### 2. 加载 Bridge
-
-用上面的 `pi install`（GitHub 或本地路径）后，默认 `pi.extensions` 会加载 lark-bridge。也可临时：
-
-```bash
-pi -e ./src/index.ts
-```
-
-Pi 内命令：
+Pi 内：
 
 ```text
 /lark-status          Hub 连接与 piId
 /lark-ask [prompt]    显式请求飞书/远程回复（need_reply）
 ```
+
+也可临时加载：
+
+```bash
+pi -e ./src/index.ts
+```
+
+#### 自动拉起说明
+
+| 项 | 行为 |
+|----|------|
+| 默认 | 开启；Hub 不可达时 spawn 本机 hub |
+| 关闭 | 环境变量 `PI_LARK_HUB_AUTOSTART=0`（或 `false` / `no` / `off`） |
+| 生命周期 | **常驻**：关掉 Pi **不会**停止 Hub |
+| 崩溃自愈 | Hub 被杀后，bridge 重连时在冷却（约 30s）后可再拉起 |
+| 非本机 URL | `PI_LARK_HUB_URL` 非 127.0.0.1/localhost 时不自动 spawn |
+| 手动启动（调试） | 包目录 `npm install && npm run hub` |
+| 手动停止 | 结束占用 `8765` 的 node 进程（任务管理器 / `Get-NetTCPConnection` 等） |
+
+Hub **仅监听 `127.0.0.1`**（默认端口 `8765`）。
 
 ### 3. console 模式验收（无需飞书）
 

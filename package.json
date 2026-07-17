@@ -43,7 +43,7 @@
   "scripts": {
     "check": "node --check src/index.ts || true",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/hub/router.test.ts src/hub/config.test.ts src/hub/feishu-lark-cli.test.ts",
+    "test": "tsx --test src/hub/router.test.ts src/hub/config.test.ts src/hub/feishu-lark-cli.test.ts src/lark-bridge/hub-autostart.test.ts",
     "hub": "tsx src/hub/cli.ts",
     "prepublishOnly": "npm run typecheck"
   },

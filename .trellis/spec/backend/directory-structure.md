@@ -47,7 +47,9 @@ pi-lark-hub/
     │   ├── feishu-inbound.ts     # lark-cli event consume 入站
     │   ├── *.test.ts             # 与模块同目录的 node:test
     └── lark-bridge/
-        └── index.ts          # 单文件 Pi 扩展实现
+        ├── index.ts          # Pi 扩展：WS / 队列 / 命令
+        ├── hub-autostart.ts  # 本机 Hub 自动拉起（health + spawn）
+        └── hub-autostart.test.ts
 ```
 
 ---
@@ -73,7 +75,7 @@ protocol → （无业务依赖）
 | 内存状态机（审批/绑定/注册） | `src/hub/approvals.ts` / `bindings.ts` / `registry.ts` |
 | 飞书出站新实现 | 实现 `FeishuTransport`（见 `feishu-transport.ts`），在 `cli.ts` 装配 |
 | 飞书入站解析 | `feishu-inbound.ts` |
-| Bridge 侧队列/UI/命令 | 仅 `lark-bridge/index.ts`（保持单扩展文件，除非文件过大再拆） |
+| Bridge 侧队列/UI/命令 | `lark-bridge/index.ts`；Hub 自动拉起逻辑放 `hub-autostart.ts` |
 | 单元测试 | 与被测模块同目录 `*.test.ts`，挂到 `package.json` `test` 脚本 |
 
 ### 不要

@@ -62,10 +62,22 @@
 |------|------|
 | `PI_LARK_HUB_PORT` | 端口，默认 8765 |
 | `PI_LARK_HUB_URL` | Bridge 连接 WS URL |
+| `PI_LARK_HUB_AUTOSTART` | Bridge 是否自动拉起本机 Hub；默认开；`0`/`false`/`no`/`off` 关闭 |
 | `PI_LARK_ALLOWED_OPEN_IDS` | 逗号分隔 open_id 白名单 |
 | `PI_LARK_FEISHU_MODE` | `console` \| `lark-cli` |
 | `PI_LARK_FEISHU_USER_ID` | 出站 DM 目标 `ou_xxx` |
 | `PI_LARK_FEISHU_CHAT_ID` | 出站群 `oc_xxx`（与 userId 二选一） |
+
+### Bridge 自动拉起 Hub
+
+| 规则 | 行为 |
+|------|------|
+| 触发 | `session_start` / 断线重连前 `ensureHubRunning`（`src/lark-bridge/hub-autostart.ts`） |
+| 探测 | `GET http://127.0.0.1:<port>/health` 且 `ok===true` → 不 spawn |
+| 范围 | 仅 loopback URL；stdio `ignore` + detached，不污染 TUI |
+| 冷却 | 每 bridge 进程约 30s 内最多一次 spawn 尝试 |
+| 生命周期 | Pi/`session_shutdown` **不**杀 Hub（常驻） |
+| 关闭 | `PI_LARK_HUB_AUTOSTART=0` |
 
 ### 路由规则（必须）
 

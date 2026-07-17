@@ -28,7 +28,7 @@ No custom error classes. Use `Error` with clear Chinese or bilingual messages fo
 |-----------|----------|
 | `sendUserMessage` throws (idle or drain) | Clear current remote flags; notify / hub error as appropriate. On drain, continue next queue item if still idle. |
 | Hub notify / outbound Feishu fails | Bridge status / notify error; do not crash Pi; hub may mark `failed_delivery` for approval retry with same decision. |
-| Hub process down | Bridge reconnect + local UI fallback for approvals / need_reply; do not crash. |
+| Hub process down | Bridge reconnect +（默认）冷却后自动再拉起本机 Hub；审批 / need_reply 可回退本机 UI；do not crash. |
 | Unauthorized openId | Hub `ok: false`, no delivery. |
 | Approval duplicate after Pi already received | `already_handled`; do not re-execute. |
 | Approval terminal but Pi delivery failed | Same decision may retry; decision not flipped. |

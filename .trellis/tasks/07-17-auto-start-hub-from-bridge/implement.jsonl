@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/multi-pi-lark-hub.md", "reason": "Hub/bridge 协议、端口、配置与 loopback 安全边界；autostart 不得破坏既有合约"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "禁止 TUI 下 stderr/stdin chrome；spawn 必须 stdio ignore"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Hub 不可用时的失败表面与 fail-closed 原则"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Bridge 用 notify/setStatus，不把 hub 日志打进 TUI"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "新模块放 src/lark-bridge/，不污染 hub 边界"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "扩展面 UI 反馈约定"}
