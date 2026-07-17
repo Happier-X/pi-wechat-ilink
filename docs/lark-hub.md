@@ -33,14 +33,14 @@ Pi B (lark-bridge) ──┼──► pi-lark-hub
 type HubConfig = {
   host: "127.0.0.1";
   port: number;
-  allowedOpenIds: string[]; // console 下空=开发放行；lark-cli 默认强制非空
+  allowedOpenIds: string[]; // console 空=开发放行；lark-cli 空=bootstrap 仅允许配对
   feishu: {
     mode: "console" | "lark-cli";
     as: "bot" | "user";
     userId?: string;  // ou_xxx，与 chatId 二选一
     chatId?: string;  // oc_xxx
   };
-  requireAllowlist: boolean; // lark-cli 默认 true
+  requireAllowlist: boolean; // lark-cli 默认 true（空白名单仍允许启动以便 /lark-pair）
 };
 ```
 
@@ -87,10 +87,22 @@ console 开发最小配置（可不建文件，直接用默认）：
 | 模式 | 白名单 | 收件人 |
 |------|--------|--------|
 | `console` | 空=全部放行（仅开发） | 无（stdout） |
-| `lark-cli` | **默认必须非空**，否则拒绝启动 | 必须 `userId` 或 `chatId` |
+| `lark-cli` | 空=bootstrap（仅「配对 &lt;码&gt;」可过）；有名单则仅名单内 | 有名单时须 `userId` 或 `chatId`；空白名单可缺省，配对后写入 |
 
-紧急可设 `"requireAllowlist": false` 启动 lark-cli（**不推荐**）。  
+**推荐**：`/lark-pair` 完成本人绑定，无需手写 `ou_xxx`。  
 Hub **仅监听 127.0.0.1**。
+
+### 本人短码配对
+
+| 步骤 | 动作 |
+|------|------|
+| 1 | Pi：`/lark-pair` → 展示 6 位码（5 分钟、用后即废） |
+| 2 | 飞书本人给机器人发：`配对 XXXXXX`（或 `pair XXXXXX`） |
+| 3 | Hub 写入 `allowedOpenIds=[open_id]`、`feishu.userId=open_id`，删除 `chatId` |
+| 模拟 | `POST /control/message` body：`{ "text": "配对 XXXXXX", "openId": "ou_…" }` |
+
+协议：`pair_begin` / `pair_challenge` / `pair_result`（见 `src/protocol.ts`）。  
+环境变量若覆盖白名单/收件人，重启后可能盖住文件绑定，配对成功回执会提示。
 
 ## 启用真实飞书（lark-cli）
 
@@ -239,7 +251,7 @@ pi -e ./src/lark-bridge/index.ts
 |------|------|
 | `PI_LARK_HUB_URL` | `ws://127.0.0.1:8765` |
 
-Pi 内：`/lark-status`、`/lark-ask [prompt]`。
+Pi 内：`/lark-status`、`/lark-ask [prompt]`、`/lark-pair`（本人短码配对）。
 
 远程文本 **禁止** `deliverAs: "followUp"`。
 

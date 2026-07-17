@@ -13,6 +13,7 @@
  * 命令：
  *   /lark-status          Hub 连接与 piId
  *   /lark-ask [prompt]    显式请求飞书回复（need_reply）
+ *   /lark-pair            飞书本人短码配对（5 分钟有效）
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -349,6 +350,30 @@ export default function larkBridge(pi: ExtensionAPI) {
 				notify(`Hub 错误：${msg.message}`, "warning");
 				return;
 			}
+			case "pair_challenge": {
+				const mins = Math.max(1, Math.round(msg.ttlMs / 60_000));
+				const lines = [
+					"飞书本人配对",
+					`配对码：${msg.code}`,
+					`有效期：约 ${mins} 分钟`,
+					"请在飞书给机器人发送：",
+					`配对 ${msg.code}`,
+					"（也可用 curl POST /control/message 模拟，body 含 openId）",
+				];
+				status(`配对码 ${msg.code}`);
+				notify(lines.join("\n"), "info");
+				return;
+			}
+			case "pair_result": {
+				notify(
+					msg.ok
+						? `配对成功：${msg.message}${msg.openId ? `\nopenId: ${msg.openId}` : ""}`
+						: `配对失败：${msg.message}`,
+					msg.ok ? "info" : "warning",
+				);
+				if (msg.ok) status(connected && piId ? `飞书 Hub ✓ ${piId}` : undefined);
+				return;
+			}
 			default:
 				return;
 		}
@@ -676,6 +701,28 @@ export default function larkBridge(pi: ExtensionAPI) {
 			block: true,
 			reason,
 		};
+	});
+
+	pi.registerCommand("lark-pair", {
+		description: "发起飞书本人短码配对（5 分钟有效，用后即废）",
+		handler: async (_args, ctx) => {
+			activeCtx = ctx;
+			if (!connected || !piId) {
+				notify(
+					"尚未连接 Hub，正在尝试连接…请稍后重试 /lark-pair",
+					"warning",
+				);
+				await connectHubWithEnsure(ctx);
+				return;
+			}
+			const ok = send({ type: "pair_begin", piId });
+			if (!ok) {
+				notify("发送 pair_begin 失败：Hub 连接不可用", "error");
+				return;
+			}
+			status("等待配对码…");
+			notify("已请求配对码，请稍候…", "info");
+		},
 	});
 
 	pi.registerCommand("lark-status", {

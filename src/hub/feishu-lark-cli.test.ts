@@ -117,11 +117,19 @@ describe("LarkCliFeishuTransport", () => {
 		await assert.rejects(() => t.send({ body: "x" }), /message_id/);
 	});
 
-	it("缺少 recipient → 构造失败", () => {
-		assert.throws(
-			() => new LarkCliFeishuTransport({ runCommand: async () => ({ code: 0, stdout: "", stderr: "" }) }),
-			/userId|chatId/,
-		);
+	it("缺少 recipient → 构造允许，send 失败；setRecipient 后可发", async () => {
+		const t = new LarkCliFeishuTransport({
+			runCommand: async () => ({
+				code: 0,
+				stdout: JSON.stringify({ message_id: "om_boot" }),
+				stderr: "",
+			}),
+			log: () => {},
+		});
+		await assert.rejects(() => t.send({ body: "x" }), /收件人|userId|chatId/);
+		t.setRecipient({ userId: "ou_bound" });
+		const r = await t.send({ body: "hello" });
+		assert.equal(r.messageId, "om_boot");
 	});
 
 	it("sendApprovalCard 含批准说明", async () => {

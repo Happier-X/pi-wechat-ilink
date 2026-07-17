@@ -151,6 +151,8 @@ async function main(): Promise<void> {
 		port: config.port,
 		feishu,
 		allowedOpenIds: config.allowedOpenIds,
+		hubConfig: config,
+		consoleAllowEmptyAllowlist: config.feishu.mode === "console",
 		onReady: (server) => {
 			if (config.feishu.mode !== "lark-cli") return;
 
@@ -199,6 +201,10 @@ async function main(): Promise<void> {
 	} else if (config.feishu.mode === "console") {
 		console.log(
 			"[pi-lark-hub] console 模式且未配置白名单：入站全部放行（仅开发）",
+		);
+	} else {
+		console.log(
+			"[pi-lark-hub] 白名单为空（bootstrap）：请在 Pi 执行 /lark-pair，飞书发送「配对 <码>」完成本人绑定",
 		);
 	}
 

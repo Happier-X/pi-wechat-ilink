@@ -3,12 +3,16 @@
  */
 
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, it } from "node:test";
 import {
 	assertValidHubConfig,
 	createDefaultHubConfig,
 	formatConfigSummary,
 	loadHubConfig,
+	saveHubOwnerBinding,
 	validateHubConfig,
 } from "./config.js";
 
@@ -123,15 +127,60 @@ describe("validateHubConfig", () => {
 		assert.ok(errs.some((e) => e.code === "missing_recipient"));
 	});
 
-	it("lark-cli 空白名单 → allowlist_required", () => {
+	it("lark-cli 空白名单 → 允许 bootstrap（无 allowlist_required）", () => {
 		const c = createDefaultHubConfig();
 		c.feishu.mode = "lark-cli";
-		c.feishu.userId = "ou_op";
 		c.allowedOpenIds = [];
 		c.requireAllowlist = true;
+		// 无 userId 亦可：bootstrap 配对
 		const errs = validateHubConfig(c);
-		assert.ok(errs.some((e) => e.code === "allowlist_required"));
-		assert.throws(() => assertValidHubConfig(c), /allowedOpenIds/);
+		assert.equal(
+			errs.some((e) => e.code === "allowlist_required"),
+			false,
+		);
+		assert.equal(
+			errs.some((e) => e.code === "missing_recipient"),
+			false,
+		);
+		assert.doesNotThrow(() => assertValidHubConfig(c));
+	});
+
+	it("lark-cli 有白名单但无收件人 → missing_recipient", () => {
+		const c = createDefaultHubConfig();
+		c.feishu.mode = "lark-cli";
+		c.allowedOpenIds = ["ou_1"];
+		c.requireAllowlist = true;
+		const errs = validateHubConfig(c);
+		assert.ok(errs.some((e) => e.code === "missing_recipient"));
+	});
+
+	it("saveHubOwnerBinding 写单主人并清 chatId", () => {
+		const dir = mkdtempSync(path.join(os.tmpdir(), "lark-hub-pair-"));
+		const configPath = path.join(dir, "config.json");
+		try {
+			const base = createDefaultHubConfig();
+			base.feishu.mode = "lark-cli";
+			base.feishu.chatId = "oc_old";
+			base.configPath = configPath;
+			const { config } = saveHubOwnerBinding({
+				openId: "ou_owner_1",
+				base,
+				configPath,
+			});
+			assert.deepEqual(config.allowedOpenIds, ["ou_owner_1"]);
+			assert.equal(config.feishu.userId, "ou_owner_1");
+			assert.equal(config.feishu.chatId, undefined);
+			assert.equal(config.feishu.mode, "lark-cli");
+			const raw = JSON.parse(readFileSync(configPath, "utf8")) as {
+				allowedOpenIds: string[];
+				feishu: { userId?: string; chatId?: string };
+			};
+			assert.deepEqual(raw.allowedOpenIds, ["ou_owner_1"]);
+			assert.equal(raw.feishu.userId, "ou_owner_1");
+			assert.equal(raw.feishu.chatId, undefined);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
 	it("lark-cli 完整配置通过", () => {

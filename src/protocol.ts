@@ -51,6 +51,12 @@ export type UnregisterMessage = {
 	piId: string;
 };
 
+/** Pi → Hub：发起飞书本人配对（生成短码） */
+export type PairBeginMessage = {
+	type: "pair_begin";
+	piId: string;
+};
+
 /** Hub → Pi：注册成功 */
 export type RegisterOkMessage = {
 	type: "register_ok";
@@ -88,18 +94,37 @@ export type ErrorMessage = {
 	message: string;
 };
 
+/** Hub → Pi：配对码挑战（本机展示） */
+export type PairChallengeMessage = {
+	type: "pair_challenge";
+	code: string;
+	expiresAt: number;
+	ttlMs: number;
+};
+
+/** Hub → Pi：配对结果（成功/失败摘要） */
+export type PairResultMessage = {
+	type: "pair_result";
+	ok: boolean;
+	openId?: string;
+	message: string;
+};
+
 export type PiToHubMessage =
 	| RegisterMessage
 	| HeartbeatMessage
 	| NotifyMessage
-	| UnregisterMessage;
+	| UnregisterMessage
+	| PairBeginMessage;
 
 export type HubToPiMessage =
 	| RegisterOkMessage
 	| NotifyAckMessage
 	| UserMessage
 	| ApprovalResultMessage
-	| ErrorMessage;
+	| ErrorMessage
+	| PairChallengeMessage
+	| PairResultMessage;
 
 export type ProtocolMessage = PiToHubMessage | HubToPiMessage;
 
@@ -151,6 +176,7 @@ export function isPiToHubMessage(msg: ProtocolMessage): msg is PiToHubMessage {
 		msg.type === "register" ||
 		msg.type === "heartbeat" ||
 		msg.type === "notify" ||
-		msg.type === "unregister"
+		msg.type === "unregister" ||
+		msg.type === "pair_begin"
 	);
 }

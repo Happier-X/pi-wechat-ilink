@@ -50,8 +50,8 @@ export class LarkCliFeishuTransport implements FeishuTransport {
 	readonly history: Array<FeishuOutboundMessage & { messageId: string; sentAt: number }> =
 		[];
 	private readonly as: "bot" | "user";
-	private readonly userId?: string;
-	private readonly chatId?: string;
+	private userId?: string;
+	private chatId?: string;
 	private readonly cliPath: string;
 	private readonly timeoutMs: number;
 	private readonly runCommand: LarkCliRunner;
@@ -66,19 +66,34 @@ export class LarkCliFeishuTransport implements FeishuTransport {
 		this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 		this.runCommand = options.runCommand ?? defaultLarkCliRunner(this.cliPath);
 		this.maxHistory = options.maxHistory ?? 100;
-		this.log = options.log ?? ((line: string) => console.log(line));
+			this.log = options.log ?? ((line: string) => console.log(line));
 
-		if (!this.userId && !this.chatId) {
-			throw new Error(
-				"LarkCliFeishuTransport 需要 userId（ou_xxx）或 chatId（oc_xxx）",
-			);
-		}
+		// 允许无收件人构造（/lark-pair bootstrap）；真正 send 前须 setRecipient 或构造时带入
 		if (this.userId && this.chatId) {
 			throw new Error("LarkCliFeishuTransport 的 userId 与 chatId 互斥");
 		}
 	}
 
+	/** 配对绑定后热更新出站目标（本人 DM） */
+	setRecipient(input: { userId?: string; chatId?: string }): void {
+		const userId = input.userId?.trim() || undefined;
+		const chatId = input.chatId?.trim() || undefined;
+		if (!userId && !chatId) {
+			throw new Error("setRecipient 需要 userId 或 chatId");
+		}
+		if (userId && chatId) {
+			throw new Error("setRecipient 的 userId 与 chatId 互斥");
+		}
+		this.userId = userId;
+		this.chatId = chatId;
+	}
+
 	async send(message: FeishuOutboundMessage): Promise<FeishuSendResult> {
+		if (!this.userId && !this.chatId) {
+			throw new Error(
+				"LarkCliFeishuTransport 未配置收件人：请在 Pi 执行 /lark-pair 绑定本人，或配置 feishu.userId / chatId",
+			);
+		}
 		const text = formatOutboundText(message);
 		const args = [
 			"im",

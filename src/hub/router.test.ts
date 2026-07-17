@@ -12,6 +12,7 @@ import {
 } from "./approvals.js";
 import { MessageBindingStore } from "./bindings.js";
 import { handleControlApproval, handleControlMessage } from "./control.js";
+import { PairingStore } from "./pairing.js";
 import { ConsoleFeishuTransport, NoopFeishuTransport } from "./feishu-transport.js";
 import { InstanceRegistry } from "./registry.js";
 import {
@@ -255,6 +256,51 @@ describe("handleControlMessage", () => {
 			{ text: "列表", openId: "x" },
 		);
 		assert.match(r.reply, /无权限/);
+	});
+
+	it("配对口令优先于白名单且成功绑定", () => {
+		const reg = new InstanceRegistry();
+		const pairing = new PairingStore({ random: () => 0.1 });
+		const begun = pairing.begin("pi-a");
+		let bound: string | undefined;
+		const r = handleControlMessage(
+			{
+				registry: reg,
+				pairing,
+				isAuthorized: () => false,
+				onOwnerBound: (openId) => {
+					bound = openId;
+					return { ok: true, message: "ok-file" };
+				},
+			},
+			{ text: `配对 ${begun.code}`, openId: "ou_owner" },
+		);
+		assert.equal(bound, "ou_owner");
+		assert.equal(r.decision.kind, "pair");
+		if (r.decision.kind === "pair") assert.equal(r.decision.ok, true);
+		assert.match(r.reply, /已绑定/);
+	});
+
+	it("错码不调用 onOwnerBound", () => {
+		const reg = new InstanceRegistry();
+		const pairing = new PairingStore({ random: () => 0.2 });
+		pairing.begin();
+		let called = false;
+		const r = handleControlMessage(
+			{
+				registry: reg,
+				pairing,
+				isAuthorized: () => false,
+				onOwnerBound: () => {
+					called = true;
+					return { ok: true, message: "x" };
+				},
+			},
+			{ text: "配对 WRONG1", openId: "ou_x" },
+		);
+		assert.equal(called, false);
+		assert.equal(r.decision.kind, "pair");
+		if (r.decision.kind === "pair") assert.equal(r.decision.ok, false);
 	});
 
 	it("默认离线时清默认且不改投", () => {

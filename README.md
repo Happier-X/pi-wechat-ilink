@@ -99,6 +99,7 @@ Pi 内：
 ```text
 /lark-status          Hub 连接与 piId
 /lark-ask [prompt]    显式请求飞书/远程回复（need_reply）
+/lark-pair            飞书本人短码配对（5 分钟有效）
 ```
 
 也可临时加载：
@@ -121,6 +122,24 @@ pi -e ./src/index.ts
 | 手动停止 | 结束占用 `8765` 的 node 进程（任务管理器 / `Get-NetTCPConnection` 等） |
 
 > **说明**：Hub 入口依赖运行时包 `tsx`（已在 `dependencies`）。GitHub `pi install` 会装生产依赖；若仍提示缺 tsx，在包安装目录执行 `npm install` 或 `pi update https://github.com/Happier-X/pi-lark-hub`。
+
+### 2. 绑定飞书本人（推荐，无需手写 ou_xxx）
+
+1. 配置 `feishu.mode=lark-cli`（文件或 `PI_LARK_FEISHU_MODE`），**可先不写** `allowedOpenIds` / `userId`。
+2. Pi 内执行 **`/lark-pair`**，本机显示 6 位配对码（约 5 分钟、用后即废）。
+3. 用**本人**飞书账号给机器人发送：`配对 AB12CD`（码以本机展示为准）。
+4. Hub 将发送者 `open_id` 写入白名单与 `feishu.userId`，并**清除** `chatId`（强制本人私聊出站）。
+
+本地模拟（console / 调试）：
+
+```bash
+# 先 /lark-pair 拿到 CODE，再：
+curl -s -X POST http://127.0.0.1:8765/control/message ^
+  -H "Content-Type: application/json" ^
+  -d "{\"text\":\"配对 CODE\",\"openId\":\"ou_your_open_id\"}"
+```
+
+> 若设置了 `PI_LARK_ALLOWED_OPEN_IDS` 等环境变量，重启后可能覆盖文件中的绑定，请清理相关 env。
 
 Hub **仅监听 `127.0.0.1`**（默认端口 `8765`）。
 

@@ -18,9 +18,12 @@ import {
 } from "../protocol.js";
 import { ApprovalStore, DEFAULT_APPROVAL_TIMEOUT_MS } from "./approvals.js";
 import { MessageBindingStore } from "./bindings.js";
+import { saveHubOwnerBinding, type HubConfig } from "./config.js";
 import { handleControlApproval, handleControlMessage } from "./control.js";
 import type { FeishuTransport } from "./feishu-transport.js";
 import { ConsoleFeishuTransport } from "./feishu-transport.js";
+import { LarkCliFeishuTransport } from "./feishu-lark-cli.js";
+import { PairingStore } from "./pairing.js";
 import { DEFAULT_HEARTBEAT_TIMEOUT_MS, InstanceRegistry } from "./registry.js";
 
 export const DEFAULT_HUB_PORT = 8765;
@@ -33,8 +36,18 @@ export type HubServerOptions = {
 	feishu?: FeishuTransport;
 	bindings?: MessageBindingStore;
 	approvals?: ApprovalStore;
-	/** 白名单 openId；空数组/未设则 console 模式全部放行 */
+	/**
+	 * 白名单 openId。
+	 * - 空 + consoleAllowEmptyAllowlist：console 开发放行
+	 * - 空 + 非 console：仅配对口令可过（bootstrap）
+	 */
 	allowedOpenIds?: string[];
+	/** console 且白名单为空时是否放行所有人；默认 true */
+	consoleAllowEmptyAllowlist?: boolean;
+	/** 配对码会话；默认新建 */
+	pairing?: PairingStore;
+	/** 用于落盘绑定的配置路径/基线 */
+	hubConfig?: HubConfig;
 	log?: (line: string) => void;
 	/**
 	 * 可选：启动后调用（例如挂载飞书 event consume）。
@@ -93,7 +106,12 @@ export async function startHubServer(options: HubServerOptions = {}): Promise<Hu
 	const log = options.log ?? ((line: string) => console.log(line));
 	const feishu = options.feishu ?? new ConsoleFeishuTransport();
 	const bindings = options.bindings ?? new MessageBindingStore();
+	const pairing = options.pairing ?? new PairingStore();
 	const allowed = new Set(options.allowedOpenIds ?? []);
+	let hubConfigSnapshot = options.hubConfig;
+	const consoleAllowEmpty =
+		options.consoleAllowEmptyAllowlist ??
+		(options.hubConfig?.feishu.mode === "console" || !options.hubConfig);
 
 	const registry = new InstanceRegistry({
 		heartbeatTimeoutMs: options.heartbeatTimeoutMs ?? DEFAULT_HEARTBEAT_TIMEOUT_MS,
@@ -102,11 +120,77 @@ export async function startHubServer(options: HubServerOptions = {}): Promise<Hu
 
 	const clients = new Map<string, ClientState>();
 	const piSockets = new Map<string, WebSocket>(); // piId → socket
+	/** 最近一次 pair_begin 的 pi，用于 pair_result 优先通知 */
+	let lastPairPiId: string | null = null;
 
 	const isAuthorized = (openId?: string): boolean => {
-		if (allowed.size === 0) return true;
+		if (allowed.size === 0) {
+			// console 开发：空名单放行；lark-cli bootstrap：非配对消息一律拒绝
+			return consoleAllowEmpty;
+		}
 		if (!openId) return false;
 		return allowed.has(openId);
+	};
+
+	const notifyPairResult = (input: {
+		ok: boolean;
+		openId?: string;
+		message: string;
+		preferPiId?: string;
+	}) => {
+		const msg: HubToPiMessage = {
+			type: "pair_result",
+			ok: input.ok,
+			openId: input.openId,
+			message: input.message,
+		};
+		if (input.preferPiId && sendToPi(input.preferPiId, msg)) return;
+		for (const [piId] of piSockets) {
+			sendToPi(piId, msg);
+		}
+	};
+
+	const onOwnerBound = (openId: string): { ok: boolean; message: string } => {
+		try {
+			const saved = saveHubOwnerBinding({
+				openId,
+				base: hubConfigSnapshot,
+				configPath: hubConfigSnapshot?.configPath,
+			});
+			hubConfigSnapshot = saved.config;
+			allowed.clear();
+			allowed.add(openId);
+
+			if (feishu instanceof LarkCliFeishuTransport) {
+				try {
+					feishu.setRecipient({ userId: openId });
+				} catch (error) {
+					const msg = error instanceof Error ? error.message : String(error);
+					log(`[hub] 更新 lark-cli 收件人失败: ${msg}`);
+				}
+			}
+
+			notifyPairResult({
+				ok: true,
+				openId,
+				message: `绑定成功，配置已写入 ${saved.configPath}`,
+				preferPiId: lastPairPiId ?? undefined,
+			});
+			log(`[hub] owner bound openId=${openId.slice(0, 8)}… path=${saved.configPath}`);
+			return {
+				ok: true,
+				message: `配置: ${saved.configPath}。若设置了 PI_LARK_ALLOWED_OPEN_IDS 等环境变量，重启后可能覆盖文件，请清理相关 env。`,
+			};
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			notifyPairResult({
+				ok: false,
+				openId,
+				message: `保存配置失败：${message}`,
+				preferPiId: lastPairPiId ?? undefined,
+			});
+			return { ok: false, message };
+		}
 	};
 
 	const isPiSocketOnline = (piId: string): boolean => {
@@ -179,7 +263,9 @@ export async function startHubServer(options: HubServerOptions = {}): Promise<Hu
 		registry,
 		bindings,
 		approvals,
+		pairing,
 		isAuthorized,
+		onOwnerBound,
 	};
 
 	const handleNotify = async (client: ClientState, m: NotifyMessage) => {
@@ -346,6 +432,28 @@ export async function startHubServer(options: HubServerOptions = {}): Promise<Hu
 				piSockets.delete(m.piId);
 				client.piId = null;
 				log(`[hub] unregister piId=${m.piId}`);
+				return;
+			}
+			case "pair_begin": {
+				const m = msg as Extract<PiToHubMessage, { type: "pair_begin" }>;
+				if (!client.piId || m.piId !== client.piId) {
+					safeSend(client.socket, {
+						type: "error",
+						message: "pair_begin 失败：piId 与连接绑定不一致",
+					});
+					return;
+				}
+				const begun = pairing.begin(client.piId);
+				lastPairPiId = client.piId;
+				safeSend(client.socket, {
+					type: "pair_challenge",
+					code: begun.code,
+					expiresAt: begun.expiresAt,
+					ttlMs: begun.ttlMs,
+				});
+				log(
+					`[hub] pair_begin piId=${client.piId} expiresInMs=${begun.ttlMs}`,
+				);
 				return;
 			}
 			default:
