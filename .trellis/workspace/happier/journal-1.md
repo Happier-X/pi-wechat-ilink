@@ -203,3 +203,38 @@ Busy-path WeChat tasks use extension-owned queue instead of Pi followUp; pairing
 ### Next Steps
 
 - None - task complete
+
+
+## Session 7: 飞书本人短码配对
+
+**Date**: 2026-07-18
+**Task**: 飞书本人短码配对
+**Branch**: `main`
+
+### Summary
+
+实现 /lark-pair 短码配对：pair 协议、PairingStore、saveHubOwnerBinding、control 先于白名单、lark-cli bootstrap、bridge 命令与文档/spec；typecheck+89 测全绿。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8ca7205` | (see git log) |
+| `195b7f4` | (see git log) |
+| `20170d8` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
