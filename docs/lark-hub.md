@@ -79,6 +79,7 @@ console 开发最小配置（可不建文件，直接用默认）：
 | `PI_LARK_REQUIRE_ALLOWLIST` | `true`/`false` |
 | `PI_LARK_HUB_CONFIG` | 配置文件绝对路径 |
 | `PI_LARK_HUB_URL` | **Bridge** 侧连接 WS（默认 `ws://127.0.0.1:8765`） |
+| `PI_LARK_HUB_AUTORESTART` | 更新后发现 loopback Hub 缺最低能力时是否自动重启；默认开，`0` 关闭 |
 
 启动时打印**脱敏**配置摘要（openId 截断）。
 

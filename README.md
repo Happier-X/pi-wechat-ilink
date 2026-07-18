@@ -116,7 +116,9 @@ pi -e ./src/index.ts
 | 关闭 | 环境变量 `PI_LARK_HUB_AUTOSTART=0`（或 `false` / `no` / `off`） |
 | 生命周期 | **常驻**：关掉 Pi **不会**停止 Hub |
 | 崩溃自愈 | Hub 被杀后，bridge 重连时在冷却（约 30s）后可再拉起 |
-| 非本机 URL | `PI_LARK_HUB_URL` 非 127.0.0.1/localhost 时不自动 spawn |
+| 更新自愈 | `/health` 能力缺失（如不支持 `pair_begin`）时，仅对 loopback 按 health.pid 结束旧 Hub 并拉起当前版 |
+| 关闭更新重启 | `PI_LARK_HUB_AUTORESTART=0`（不影响 Hub 不可达时的 AUTOSTART） |
+| 非本机 URL | `PI_LARK_HUB_URL` 非 127.0.0.1/localhost 时不自动 spawn/重启 |
 | 自动启动日志 | `~/.pi/lark-hub/hub.log`（失败/超时时 notify 会附路径） |
 | 手动启动（调试） | 包目录 `npm install && npm run hub` |
 | 手动停止 | 结束占用 `8765` 的 node 进程（任务管理器 / `Get-NetTCPConnection` 等） |

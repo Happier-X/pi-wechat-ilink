@@ -5,6 +5,7 @@
 
 import http from "node:http";
 import { randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
 import { WebSocketServer, WebSocket } from "ws";
 import {
 	generatePiId,
@@ -13,6 +14,7 @@ import {
 	type Capability,
 	type HubToPiMessage,
 	type MessageSource,
+	HUB_FEATURES,
 	type NotifyMessage,
 	type PiToHubMessage,
 } from "../protocol.js";
@@ -28,6 +30,16 @@ import { DEFAULT_HEARTBEAT_TIMEOUT_MS, InstanceRegistry } from "./registry.js";
 
 export const DEFAULT_HUB_PORT = 8765;
 export const DEFAULT_HUB_HOST = "127.0.0.1";
+
+const packageVersion = (() => {
+	try {
+		const require = createRequire(import.meta.url);
+		const pkg = require("../../package.json") as { version?: unknown };
+		return typeof pkg.version === "string" ? pkg.version : "unknown";
+	} catch {
+		return "unknown";
+	}
+})();
 
 export type HubServerOptions = {
 	host?: string;
@@ -492,6 +504,9 @@ export async function startHubServer(options: HubServerOptions = {}): Promise<Hu
 			});
 			json(res, 200, {
 				ok: true,
+				pid: process.pid,
+				packageVersion,
+				features: [...HUB_FEATURES],
 				host,
 				port,
 				defaultPiId: registry.getDefaultPiId(),

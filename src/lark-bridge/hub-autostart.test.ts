@@ -15,6 +15,9 @@ import {
 	resolveHubSpawnSpec,
 	resolvePackageRoot,
 	shouldAutoPair,
+	isHubCompatible,
+	isAutorestartEnabled,
+	stopStaleHub,
 } from "./hub-autostart.js";
 
 const okSpawn = (logPath = "/tmp/hub-test.log") =>
@@ -36,6 +39,26 @@ describe("isAutostartEnabled", () => {
 		for (const v of ["1", "true", "yes", "on"]) {
 			assert.equal(isAutostartEnabled({ PI_LARK_HUB_AUTOSTART: v }), true, v);
 		}
+	});
+});
+
+describe("Hub 过期检测", () => {
+	it("能力满足才兼容", () => {
+		assert.equal(isHubCompatible({ ok: true, features: ["pair_begin"] }), true);
+		assert.equal(isHubCompatible({ ok: true, features: [] }), false);
+		assert.equal(isHubCompatible({ ok: true }), false);
+	});
+
+	it("自动重启默认开启，可关闭", () => {
+		assert.equal(isAutorestartEnabled({}), true);
+		assert.equal(isAutorestartEnabled({ PI_LARK_HUB_AUTORESTART: "0" }), false);
+	});
+
+	it("只结束合法旧 Hub pid", () => {
+		const killed: number[] = [];
+		assert.deepEqual(stopStaleHub(1234, (pid) => killed.push(pid)), { ok: true });
+		assert.deepEqual(killed, [1234]);
+		assert.equal(stopStaleHub(undefined, () => {}).ok, false);
 	});
 });
 
@@ -156,6 +179,107 @@ describe("ensureHubRunning", () => {
 			},
 		});
 		assert.equal(r.status, "ready");
+		assert.equal(spawned, 0);
+	});
+
+	it("过期 Hub 有 pid 时自动 kill 并拉起", async () => {
+		let killed: number[] = [];
+		let spawned = 0;
+		let phase: "old" | "down" | "new" = "old";
+		let clock = 1_000_000;
+		const r = await ensureHubRunning({
+			env: {},
+			hubWsUrl: "ws://127.0.0.1:8765",
+			logPath: "C:/tmp/hub-restart.log",
+			probeTimeoutMs: 50,
+			readyTimeoutMs: 2_000,
+			pollIntervalMs: 100,
+			probeDetail: async () => {
+				if (phase === "old") {
+					return { ok: true, pid: 4242, features: [] };
+				}
+				if (phase === "down") return null;
+				return { ok: true, pid: 9999, features: ["pair_begin"] };
+			},
+			probe: async () => phase !== "down",
+			killFn: (pid) => {
+				killed.push(pid);
+				phase = "down";
+			},
+			spawnFn: (_spec, logPath) => {
+				spawned++;
+				phase = "new";
+				return okSpawn(logPath);
+			},
+			sleep: async (ms) => {
+				clock += ms;
+			},
+			now: () => clock,
+		});
+		assert.deepEqual(killed, [4242]);
+		assert.equal(spawned, 1);
+		assert.equal(r.status, "spawned-ready");
+	});
+
+	it("过期 Hub SIGTERM 后仍在线时不 spawn", async () => {
+		let spawned = 0;
+		let clock = 1_000_000;
+		const r = await ensureHubRunning({
+			env: {},
+			hubWsUrl: "ws://127.0.0.1:8765",
+			probeTimeoutMs: 10,
+			readyTimeoutMs: 300,
+			pollIntervalMs: 100,
+			probeDetail: async () => ({ ok: true, pid: 4242, features: [] }),
+			probe: async () => true,
+			killFn: () => {},
+			spawnFn: (_spec, logPath) => {
+				spawned++;
+				return okSpawn(logPath);
+			},
+			sleep: async (ms) => {
+				clock += ms;
+			},
+			now: () => clock,
+		});
+		assert.equal(r.status, "failed");
+		assert.match(r.detail ?? "", /仍未退出/);
+		assert.equal(spawned, 0);
+	});
+
+	it("过期 Hub 无 pid 时失败且不 spawn", async () => {
+		let spawned = 0;
+		const r = await ensureHubRunning({
+			env: {},
+			hubWsUrl: "ws://127.0.0.1:8765",
+			probeDetail: async () => ({ ok: true, features: [] }),
+			spawnFn: (_spec, logPath) => {
+				spawned++;
+				return okSpawn(logPath);
+			},
+		});
+		assert.equal(r.status, "failed");
+		assert.match(r.detail ?? "", /pid/);
+		assert.equal(spawned, 0);
+	});
+
+	it("关闭 AUTORESTART 时过期不 kill", async () => {
+		let killed = 0;
+		let spawned = 0;
+		const r = await ensureHubRunning({
+			env: { PI_LARK_HUB_AUTORESTART: "0" },
+			hubWsUrl: "ws://127.0.0.1:8765",
+			probeDetail: async () => ({ ok: true, pid: 1, features: [] }),
+			killFn: () => {
+				killed++;
+			},
+			spawnFn: (_spec, logPath) => {
+				spawned++;
+				return okSpawn(logPath);
+			},
+		});
+		assert.equal(r.status, "skipped");
+		assert.equal(killed, 0);
 		assert.equal(spawned, 0);
 	});
 

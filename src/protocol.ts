@@ -15,6 +15,10 @@ export type ApprovalDecision = "approve" | "reject";
 
 export type Capability = "approval" | "prompt" | "settled";
 
+/** Hub 对 Bridge 暴露的协议能力；新增不破坏旧客户端 */
+export const HUB_FEATURES = ["pair_begin"] as const;
+export type HubFeature = (typeof HUB_FEATURES)[number];
+
 /** Pi → Hub：注册（piId 可省略，由 Hub 生成） */
 export type RegisterMessage = {
 	type: "register";

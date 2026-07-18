@@ -34,6 +34,18 @@ export type HubSpawnSpec = {
 	cwd: string;
 };
 
+export type HubHealthStatus = {
+	ok: boolean;
+	pid?: number;
+	packageVersion?: string;
+	features?: string[];
+	feishuMode?: string;
+	ownerBound?: boolean;
+	needsPairing?: boolean;
+};
+
+export const REQUIRED_HUB_FEATURES = ["pair_begin"] as const;
+
 export type EnsureHubRunningOptions = {
 	hubWsUrl?: string;
 	env?: NodeJS.ProcessEnv;
@@ -53,6 +65,10 @@ export type EnsureHubRunningOptions = {
 	now?: () => number;
 	/** 可注入探测（测试） */
 	probe?: (httpOrigin: string, timeoutMs: number) => Promise<boolean>;
+	/** 可注入 health 详情探测（stale 判定） */
+	probeDetail?: (httpOrigin: string, timeoutMs: number) => Promise<HubHealthStatus | null>;
+	/** 可注入 kill（测试） */
+	killFn?: (pid: number) => void;
 	/** 可注入 spawn（测试） */
 	spawnFn?: (
 		spec: HubSpawnSpec,
@@ -73,6 +89,12 @@ let lastSpawnAttemptAt = 0;
 /** 测试用：重置冷却状态 */
 export function resetAutostartCooldownState(): void {
 	lastSpawnAttemptAt = 0;
+}
+
+export function isAutorestartEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+	const raw = env.PI_LARK_HUB_AUTORESTART;
+	if (raw === undefined || raw.trim() === "") return true;
+	return !["0", "false", "no", "off"].includes(raw.trim().toLowerCase());
 }
 
 export function isAutostartEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -171,6 +193,40 @@ export function shouldAutoPair(input: {
 	return input.needsPairing && !input.autoPairAttempted;
 }
 
+export function isHubCompatible(
+	status: HubHealthStatus | null,
+	required: readonly string[] = REQUIRED_HUB_FEATURES,
+): boolean {
+	if (!status?.ok || !Array.isArray(status.features)) return false;
+	return required.every((feature) => status.features!.includes(feature));
+}
+
+export function stopStaleHub(
+	pid: number | undefined,
+	killFn: (pid: number) => void = (value) => process.kill(value, "SIGTERM"),
+): { ok: true } | { ok: false; error: string } {
+	if (
+		typeof pid !== "number" ||
+		!Number.isInteger(pid) ||
+		pid <= 0 ||
+		pid === process.pid
+	) {
+		return {
+			ok: false,
+			error: "旧 Hub health 未提供合法 pid，无法自动重启；请手动重启 Hub",
+		};
+	}
+	try {
+		killFn(pid);
+		return { ok: true };
+	} catch (error) {
+		return {
+			ok: false,
+			error: `结束旧 Hub（pid=${pid}）失败：${error instanceof Error ? error.message : String(error)}`,
+		};
+	}
+}
+
 export type HubPairingStatus = {
 	ok: boolean;
 	feishuMode?: string;
@@ -179,6 +235,27 @@ export type HubPairingStatus = {
 };
 
 /** GET /health 解析配对相关字段；失败返回 null */
+export function fetchHubHealthDetail(
+	httpOrigin: string,
+	timeoutMs: number = DEFAULT_PROBE_TIMEOUT_MS,
+): Promise<HubHealthStatus | null> {
+	return new Promise((resolve) => {
+		const req = http.get(`${httpOrigin.replace(/\/$/, "")}/health`, { timeout: timeoutMs }, (res) => {
+			const chunks: Buffer[] = [];
+			res.on("data", (c) => chunks.push(c));
+			res.on("end", () => {
+				if (res.statusCode !== 200) return resolve(null);
+				try {
+					const value = JSON.parse(Buffer.concat(chunks).toString("utf8")) as HubHealthStatus;
+					resolve(value.ok === true ? value : null);
+				} catch { resolve(null); }
+			});
+		});
+		req.on("timeout", () => { req.destroy(); resolve(null); });
+		req.on("error", () => resolve(null));
+	});
+}
+
 export function fetchHubPairingStatus(
 	httpOrigin: string,
 	timeoutMs: number = DEFAULT_PROBE_TIMEOUT_MS,
@@ -342,7 +419,16 @@ export async function ensureHubRunning(
 	const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
 	const now = options.now ?? Date.now;
 	const probe = options.probe ?? probeHubHealth;
+	// 旧测试/调用方只注入 boolean probe 时，视为兼容 health；生产使用详情探测
+	const probeDetail = options.probeDetail ??
+		(options.probe
+			? async (origin: string, timeout: number): Promise<HubHealthStatus | null> =>
+				(await options.probe!(origin, timeout))
+					? { ok: true, features: [...REQUIRED_HUB_FEATURES] }
+					: null
+			: fetchHubHealthDetail);
 	const spawnFn = options.spawnFn ?? spawnHubDetached;
+	const killFn = options.killFn;
 	const sleep = options.sleep ?? defaultSleep;
 	const moduleUrl = options.moduleUrl ?? import.meta.url;
 	const logPath = options.logPath ?? defaultHubLogPath();
@@ -362,14 +448,42 @@ export async function ensureHubRunning(
 		};
 	}
 
-	if (await probe(httpOrigin, probeTimeoutMs)) {
+	const health = await probeDetail(httpOrigin, probeTimeoutMs);
+	if (isHubCompatible(health)) {
 		return { status: "ready", detail: "Hub 已在运行" };
+	}
+
+	if (health?.ok && !isHubCompatible(health)) {
+		if (!isAutorestartEnabled(env)) {
+			return {
+				status: "skipped",
+				detail:
+					"Hub 版本过期，但已关闭自动重启（PI_LARK_HUB_AUTORESTART=0）",
+			};
+		}
+		const stopped = stopStaleHub(health.pid, killFn);
+		if (!stopped.ok) return { status: "failed", detail: stopped.error };
+
+		// 等旧 Hub 下线，避免新进程抢不到端口；超时禁止继续 spawn
+		const stopDeadline = now() + Math.min(readyTimeoutMs, 5_000);
+		let oldHubStillOnline = await probe(httpOrigin, probeTimeoutMs);
+		while (now() < stopDeadline && oldHubStillOnline) {
+			await sleep(pollIntervalMs);
+			oldHubStillOnline = await probe(httpOrigin, probeTimeoutMs);
+		}
+		if (oldHubStillOnline) {
+			return {
+				status: "failed",
+				detail: `旧 Hub（pid=${health.pid}）在 SIGTERM 后仍未退出；为避免端口冲突，未启动新 Hub，请手动重启`,
+			};
+		}
 	}
 
 	const t = now();
 	if (lastSpawnAttemptAt > 0 && t - lastSpawnAttemptAt < cooldownMs) {
 		// 冷却内：再探一次（可能别的 Pi 刚拉起）
-		if (await probe(httpOrigin, probeTimeoutMs)) {
+		const detail = await probeDetail(httpOrigin, probeTimeoutMs);
+		if (isHubCompatible(detail)) {
 			return { status: "ready", detail: "Hub 已在运行" };
 		}
 		return {
@@ -399,7 +513,7 @@ export async function ensureHubRunning(
 	const usedLog = spawned.logPath ?? logPath;
 	const deadline = t + readyTimeoutMs;
 	while (now() < deadline) {
-		if (await probe(httpOrigin, probeTimeoutMs)) {
+		if (isHubCompatible(await probeDetail(httpOrigin, probeTimeoutMs))) {
 			return {
 				status: "spawned-ready",
 				detail: `已自动启动本机 Hub（日志：${usedLog}）`,
@@ -409,7 +523,7 @@ export async function ensureHubRunning(
 	}
 
 	// 最后一次探测
-	if (await probe(httpOrigin, probeTimeoutMs)) {
+	if (isHubCompatible(await probeDetail(httpOrigin, probeTimeoutMs))) {
 		return {
 			status: "spawned-ready",
 			detail: `已自动启动本机 Hub（日志：${usedLog}）`,
