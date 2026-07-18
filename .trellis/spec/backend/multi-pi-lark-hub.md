@@ -72,7 +72,7 @@
 | `PI_LARK_HUB_AUTOSTART` | Bridge 是否自动拉起本机 Hub；默认开；`0`/`false`/`no`/`off` 关闭 |
 | `PI_LARK_HUB_AUTORESTART` | health 能力过期时是否自动重启 loopback Hub；默认开；falsy 关闭 |
 | `PI_LARK_ALLOWED_OPEN_IDS` | 逗号分隔 open_id 白名单 |
-| `PI_LARK_FEISHU_MODE` | `console` \| `lark-cli` |
+| `PI_LARK_FEISHU_MODE` | `console` \| `lark-cli` \| `native` |
 | `PI_LARK_FEISHU_USER_ID` | 出站 DM 目标 `ou_xxx` |
 | `PI_LARK_FEISHU_CHAT_ID` | 出站群 `oc_xxx`（与 userId 二选一） |
 
@@ -126,6 +126,9 @@
 |------|------|------|--------|
 | `console` | 日志 + 合成 `console-` messageId | HTTP `/control/*` | 空数组可放行（开发，`consoleAllowEmptyAllowlist`） |
 | `lark-cli` | `lark-cli im +messages-send`（可 bootstrap 无收件人构造，send 前须有 recipient） | 可选 `event consume` + HTTP | **空=bootstrap**：非配对消息拒绝；有名单则仅名单 + 须 userId/chatId |
+| `native` | 官方 OpenAPI `im.message.create`，返回真实 `message_id` | 官方 SDK WebSocket `im.message.receive_v1` | 空=bootstrap；未绑定时仅 `/lark-pair`，禁止首聊自助成主 |
+
+`/lark-setup [force]` 对齐 cc-connect 的 PersonalAgent registration：二维码载荷为飞书返回的 `verification_uri_complete` URL，不是 `配对 CODE`。注册在本机轮询完成；凭证独立落盘到 `~/.pi/lark-hub/credentials.json`（可由 `PI_LARK_HUB_CREDENTIALS` 覆盖），secret 不进入 config/日志。已有凭证默认拒绝，只有 `force` 覆盖。native WS 必须达到 `connected` 才算就绪；热切换失败需恢复旧 transport/inbound/config。控制面仍为 loopback，不自建公网回调。
 
 运行时 `isAuthorized`：**空名单 + 非 console → false**（配对分支已在 control 先处理）；**禁止** `allowed.size===0 → true` 用于 lark-cli。
 

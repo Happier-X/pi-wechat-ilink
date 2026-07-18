@@ -2,7 +2,7 @@
 
 本机守护进程 `pi-lark-hub` + Pi 扩展 `lark-bridge`，用于多 Pi 注册、默认路由、任务结束通知、回复绑定、危险命令审批与显式 need_reply。
 
-**默认模式：`console`（离线可测）**。真实飞书为 **opt-in**：配置 `feishu.mode=lark-cli` 后通过本机 `lark-cli` 收发。
+**默认模式：`console`（离线可测）**。真实飞书推荐在 Pi 执行 `/lark-setup`，扫描飞书返回的官方授权 URL 二维码后启用 `native`（原生 OpenAPI + 官方 WebSocket，不依赖 `lark-cli`）；`lark-cli` 模式继续兼容。Hub 始终只监听 loopback，不增加公网回调。
 
 ## 架构
 
@@ -35,7 +35,7 @@ type HubConfig = {
   port: number;
   allowedOpenIds: string[]; // console 空=开发放行；lark-cli 空=bootstrap 仅允许配对
   feishu: {
-    mode: "console" | "lark-cli";
+    mode: "console" | "lark-cli" | "native";
     as: "bot" | "user";
     userId?: string;  // ou_xxx，与 chatId 二选一
     chatId?: string;  // oc_xxx
@@ -73,7 +73,8 @@ console 开发最小配置（可不建文件，直接用默认）：
 |------|------|
 | `PI_LARK_HUB_PORT` | 端口 |
 | `PI_LARK_ALLOWED_OPEN_IDS` | 逗号分隔 open_id 白名单 |
-| `PI_LARK_FEISHU_MODE` | `console` \| `lark-cli` |
+| `PI_LARK_FEISHU_MODE` | `console` \| `lark-cli` \| `native` |
+| `PI_LARK_HUB_CREDENTIALS` | 原生凭证文件路径；默认 `~/.pi/lark-hub/credentials.json` |
 | `PI_LARK_FEISHU_USER_ID` | 出站 DM 目标 `ou_xxx` |
 | `PI_LARK_FEISHU_CHAT_ID` | 出站群/会话 `oc_xxx`（与 USER_ID 互斥） |
 | `PI_LARK_REQUIRE_ALLOWLIST` | `true`/`false` |
@@ -90,8 +91,9 @@ console 开发最小配置（可不建文件，直接用默认）：
 | `console` | 空=全部放行（仅开发） | 无（stdout） |
 | `lark-cli` | 空=bootstrap（仅「配对 &lt;码&gt;」可过）；有名单则仅名单内 | 有名单时须 `userId` 或 `chatId`；空白名单可缺省，配对后写入 |
 
-**推荐**：`/lark-pair` 完成本人绑定，无需手写 `ou_xxx`。  
-Hub **仅监听 127.0.0.1**。
+**推荐开局**：执行 `/lark-setup`；已有凭证时须显式 `/lark-setup force` 才覆盖。二维码载荷是飞书 `verification_uri_complete` URL。成功后 `appId/appSecret/brand` 仅写入独立 `credentials.json`（尽量使用 `0600`），secret 不进入 `config.json`、日志或 Pi 通知。扫码返回真人 open_id 时直接绑定；open_id 缺失或等于 bot 时仍启用原生运行时，但必须再用 `/lark-pair` 短码绑定，首个私聊者不会自动成为主人。
+
+该流程对应 cc-connect 的 registration `init → begin → poll`，运行时则使用官方 SDK WebSocket 收取 `im.message.receive_v1`、OpenAPI 发送消息。Hub **仅监听 127.0.0.1**。
 
 ### 本人短码配对
 

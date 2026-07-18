@@ -99,6 +99,7 @@ Pi 内：
 ```text
 /lark-status          Hub 连接与 piId
 /lark-ask [prompt]    显式请求飞书/远程回复（need_reply）
+/lark-setup [force]   扫描飞书官方授权二维码并启用原生模式
 /lark-pair            飞书本人短码配对（5 分钟有效）
 ```
 
