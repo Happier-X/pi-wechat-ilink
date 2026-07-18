@@ -43,11 +43,12 @@
   "scripts": {
     "check": "node --check src/index.ts || true",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/hub/router.test.ts src/hub/config.test.ts src/hub/feishu-lark-cli.test.ts src/hub/pairing.test.ts src/lark-bridge/hub-autostart.test.ts",
+    "test": "tsx --test src/hub/router.test.ts src/hub/config.test.ts src/hub/feishu-lark-cli.test.ts src/hub/pairing.test.ts src/lark-bridge/hub-autostart.test.ts src/lark-bridge/pair-qr.test.ts",
     "hub": "tsx src/hub/cli.ts",
     "prepublishOnly": "npm run typecheck"
   },
   "dependencies": {
+    "qrcode": "^1.5.4",
     "tsx": "^4.20.3",
     "ws": "^8.18.3"
   },
@@ -62,6 +63,7 @@
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@types/node": "^22.15.0",
+    "@types/qrcode": "^1.5.6",
     "@types/ws": "^8.18.1",
     "typescript": "^5.8.0"
   },

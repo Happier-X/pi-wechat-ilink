@@ -36,6 +36,7 @@ import {
 	shouldAutoPair,
 	type EnsureHubResult,
 } from "./hub-autostart.js";
+import { openPathBestEffort, writePairQrPng } from "./pair-qr.js";
 
 const STATUS_KEY = "lark-bridge";
 const DEFAULT_HUB_URL = process.env.PI_LARK_HUB_URL ?? "ws://127.0.0.1:8765";
@@ -388,19 +389,33 @@ export default function larkBridge(pi: ExtensionAPI) {
 			}
 			case "pair_challenge": {
 				const mins = Math.max(1, Math.round(msg.ttlMs / 60_000));
-				const lines = [
-					autoPairPending
-						? "首次使用：请完成飞书本人配对"
-						: "飞书本人配对",
-					`配对码：${msg.code}`,
-					`有效期：约 ${mins} 分钟`,
-					"请在飞书给机器人发送：",
-					`配对 ${msg.code}`,
-					"（也可用 curl POST /control/message 模拟，body 含 openId）",
-				];
+				const fromAuto = autoPairPending;
 				autoPairPending = false;
 				status(`配对码 ${msg.code}`);
-				notify(lines.join("\n"), "info");
+				void (async () => {
+					const lines = [
+						fromAuto
+							? "首次使用：请完成飞书本人配对"
+							: "飞书本人配对",
+						`配对码：${msg.code}`,
+						`有效期：约 ${mins} 分钟`,
+						"请在飞书给机器人发送：",
+						`配对 ${msg.code}`,
+					];
+					const qr = await writePairQrPng(msg.code);
+					if (qr.ok) {
+						lines.push(`二维码已生成：${qr.path}`, "（已尝试系统打开图片；也可扫码查看口令后在飞书发送）");
+						openPathBestEffort(qr.path);
+					} else {
+						lines.push(
+							`（二维码生成失败，请直接使用上方短码：${qr.error}）`,
+						);
+					}
+					lines.push(
+						"（也可用 curl POST /control/message 模拟，body 含 openId）",
+					);
+					notify(lines.join("\n"), "info");
+				})();
 				return;
 			}
 			case "pair_result": {
