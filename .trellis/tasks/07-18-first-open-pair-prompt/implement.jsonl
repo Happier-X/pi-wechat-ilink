@@ -1,0 +1,5 @@
+{"path":".trellis/spec/backend/multi-pi-lark-hub.md","title":"Hub 合约与配对"}
+{"path":".trellis/spec/backend/error-handling.md","title":"错误与 bootstrap"}
+{"path":"src/lark-bridge/index.ts","title":"Bridge 会话与 /lark-pair"}
+{"path":"src/hub/server.ts","title":"health 与 pair_begin"}
+{"path":"src/lark-bridge/hub-autostart.ts","title":"URL 推导与 health 探测"}
