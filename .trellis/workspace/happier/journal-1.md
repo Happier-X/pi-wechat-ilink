@@ -308,3 +308,38 @@ pair_challenge 生成 pair-qr.png 并尽力打开；qrcode 依赖；绑定协议
 ### Next Steps
 
 - None - task complete
+
+
+## Session 10: 自动重启过期本机 Hub
+
+**Date**: 2026-07-18
+**Task**: 自动重启过期本机 Hub
+**Branch**: `main`
+
+### Summary
+
+Bridge 按 /health features 判定 loopback Hub 过期；仅 SIGTERM health.pid，默认 PI_LARK_HUB_AUTORESTART 开启，无 pid 或退出超时则提示手动重启；typecheck+103 测通过，已写入 multi-pi 与 error-handling 合约。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `36aeaaa` | (see git log) |
+| `0c9ad63` | (see git log) |
+| `b22db46` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
