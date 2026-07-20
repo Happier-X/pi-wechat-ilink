@@ -9,7 +9,6 @@ import {
 	type DecideApprovalResult,
 } from "./approvals.js";
 import type { MessageBindingStore } from "./bindings.js";
-import { parsePairCommand, type PairingStore } from "./pairing.js";
 import type { InstanceRegistry } from "./registry.js";
 import {
 	formatOnlineList,
@@ -63,14 +62,8 @@ export type ControlContext = {
 	registry: InstanceRegistry;
 	bindings?: MessageBindingStore;
 	approvals?: ApprovalStore;
-	pairing?: PairingStore;
 	/** 是否授权；空白名单策略由调用方 isAuthorized 决定 */
 	isAuthorized?: (openId?: string) => boolean;
-	/** 配对成功后落盘并热更新；返回给用户的附加说明 */
-	onOwnerBound?: (openId: string) => {
-		ok: boolean;
-		message: string;
-	};
 };
 
 /**
@@ -88,26 +81,15 @@ export function handleControlMessage(
 
 	if (!text) {
 		return {
-			reply: "请发送文字消息。可用命令：列表、使用 <piId|项目名>、配对 <码>",
+			reply: "请发送文字消息。可用命令：列表、使用 <piId|项目名>",
 			decision: { kind: "ignored", reason: "empty" },
 		};
-	}
-
-	// 配对口令优先于白名单（解决首次无人在名单无法绑定）
-	if (ctx.pairing) {
-		const pairCmd = parsePairCommand(text);
-		if (pairCmd) {
-			return handlePairCommand(ctx, {
-				code: pairCmd.code,
-				openId: input.openId,
-			});
-		}
 	}
 
 	if (!auth(input.openId)) {
 		return {
 			reply:
-				"无权限：当前用户未在白名单中。若为本人首次绑定，请在 Pi 执行 /lark-pair 后发送：配对 <码>",
+				"无权限：当前用户未在可信主人白名单中。请在本机执行 /lark 重新开局",
 			decision: { kind: "ignored", reason: "unauthorized" },
 		};
 	}
@@ -313,59 +295,6 @@ export function handleControlApproval(
 	});
 
 	return approvalResultToControl(result, requestId, input.openId);
-}
-
-function handlePairCommand(
-	ctx: ControlContext,
-	input: { code: string; openId?: string },
-): ControlResult {
-	const pairing = ctx.pairing!;
-	const result = pairing.consume({
-		code: input.code,
-		openId: input.openId,
-	});
-
-	if (!result.ok) {
-		const messages: Record<typeof result.reason, string> = {
-			no_session: "没有进行中的配对。请在本机 Pi 执行 /lark-pair 获取新码。",
-			expired: "配对码已过期。请在本机 Pi 重新执行 /lark-pair。",
-			mismatch: "配对码不正确。请核对后重试（码区分大小写已自动忽略）。",
-			no_open_id: "无法识别你的 open_id，配对失败。",
-		};
-		return {
-			reply: messages[result.reason],
-			decision: {
-				kind: "pair",
-				ok: false,
-				reason: result.reason,
-			},
-		};
-	}
-
-	if (!ctx.onOwnerBound) {
-		return {
-			reply: `配对码正确，但 Hub 未配置落盘回调（openId=${result.openId}）。`,
-			decision: {
-				kind: "pair",
-				ok: false,
-				openId: result.openId,
-				reason: "no_callback",
-			},
-		};
-	}
-
-	const bound = ctx.onOwnerBound(result.openId);
-	return {
-		reply: bound.ok
-			? `已绑定为本人（仅你可控制）。open_id 已写入白名单与私聊目标。\n${bound.message}`
-			: `配对校验通过，但保存配置失败：${bound.message}`,
-		decision: {
-			kind: "pair",
-			ok: bound.ok,
-			openId: result.openId,
-			reason: bound.ok ? undefined : "save_failed",
-		},
-	};
 }
 
 function handleApprovalTextCommand(

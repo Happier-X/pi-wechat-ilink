@@ -1,6 +1,6 @@
 /**
  * Hub 配置：defaults < 配置文件 < 环境变量。
- * 默认 console 模式，单元测试可离线；真实飞书为 opt-in（mode=lark-cli）。
+ * Hub 只支持飞书原生模式；未完成开局时不启动飞书运行时。
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -9,13 +9,13 @@ import path from "node:path";
 import { replaceFileAtomic } from "./atomic-file.js";
 import { DEFAULT_HUB_HOST, DEFAULT_HUB_PORT } from "./server.js";
 
-export type FeishuMode = "console" | "lark-cli" | "native";
+export type FeishuMode = "native" | (string & {});
 export type FeishuAs = "bot" | "user";
 
 export type HubConfig = {
 	host: "127.0.0.1";
 	port: number;
-	/** 空数组：console 可全部放行；lark-cli 允许空名单以 bootstrap 配对 */
+	/** 唯一可信主人；未完成扫码开局时为空 */
 	allowedOpenIds: string[];
 	feishu: {
 		mode: FeishuMode;
@@ -25,10 +25,7 @@ export type HubConfig = {
 		/** chat_id（oc_xxx），与 userId 二选一 */
 		chatId?: string;
 	};
-	/**
-	 * true 时：allowedOpenIds 为空则拒绝启动（legacy）。
-	 * 默认：console=false，lark-cli=true，但 lark-cli 空白名单允许 bootstrap 配对（见 validateHubConfig）。
-	 */
+	/** 完成开局后为 true；未配置状态允许 Hub 启动等待 `/lark` */
 	requireAllowlist: boolean;
 	/** 实际加载的配置文件路径（若有） */
 	configPath?: string;
@@ -70,7 +67,7 @@ export function createDefaultHubConfig(): HubConfig {
 		port: DEFAULT_HUB_PORT,
 		allowedOpenIds: [],
 		feishu: {
-			mode: "console",
+			mode: "native",
 			as: "bot",
 		},
 		requireAllowlist: false,
@@ -88,8 +85,8 @@ function parseOpenIdList(raw: string | undefined): string[] | undefined {
 function parseMode(raw: string | undefined): FeishuMode | undefined {
 	if (raw === undefined || raw === "") return undefined;
 	const v = raw.trim().toLowerCase();
-	if (v === "console" || v === "lark-cli" || v === "native") return v;
-	throw new Error(`无效 feishu.mode: ${raw}（允许 console | lark-cli | native）`);
+	if (v === "native") return v;
+	throw new Error(`无效 feishu.mode: ${raw}（只允许 native）`);
 }
 
 function parseAs(raw: string | undefined): FeishuAs | undefined {
@@ -130,7 +127,7 @@ function readConfigFile(
 
 /**
  * 合并顺序：defaults < 配置文件 < 环境变量。
- * requireAllowlist：若文件/环境未显式给出，则在 mode=lark-cli 时默认 true。
+ * 旧模式值会被拒绝，仅接受 native。
  */
 export function loadHubConfig(options: LoadHubConfigOptions = {}): HubConfig {
 	const env = options.env ?? process.env;
@@ -205,12 +202,6 @@ export function loadHubConfig(options: LoadHubConfigOptions = {}): HubConfig {
 		const v = env.PI_LARK_REQUIRE_ALLOWLIST.trim().toLowerCase();
 		if (v === "1" || v === "true" || v === "yes") merged.requireAllowlist = true;
 		else if (v === "0" || v === "false" || v === "no") merged.requireAllowlist = false;
-	} else if (
-		fromFile?.requireAllowlist === undefined &&
-		merged.feishu.mode === "lark-cli"
-	) {
-		// 未显式配置时：lark-cli 默认强制白名单
-		merged.requireAllowlist = true;
 	}
 
 	// host 永远 loopback
@@ -245,44 +236,13 @@ export function validateHubConfig(config: HubConfig): ConfigValidationError[] {
 		});
 	}
 
-	if (config.feishu.mode !== "console" && config.feishu.mode !== "lark-cli" && config.feishu.mode !== "native") {
-		errors.push({
-			code: "invalid_mode",
-			message: `无效 feishu.mode: ${config.feishu.mode}`,
-		});
-	}
-
-	if (config.feishu.mode === "lark-cli" || config.feishu.mode === "native") {
-		const hasUser = Boolean(config.feishu.userId?.trim());
-		const hasChat = Boolean(config.feishu.chatId?.trim());
-		const bootstrapping = config.allowedOpenIds.length === 0;
-		// 空白名单：允许无收件人（bootstrap 配对）；已有主人则必须配置收件人
-		if (!bootstrapping && !hasUser && !hasChat) {
-			errors.push({
-				code: "missing_recipient",
-				message:
-					`feishu.mode=${config.feishu.mode} 且已配置白名单时必须设置 feishu.userId（ou_xxx）或 feishu.chatId（oc_xxx）；或清空白名单后用 /lark-pair 绑定`,
-			});
-		}
-		if (hasUser && hasChat) {
-			errors.push({
-				code: "ambiguous_recipient",
-				message: "feishu.userId 与 feishu.chatId 互斥，请只配置其一",
-			});
-		}
-	}
-
-	// console + requireAllowlist：仍强制非空；lark-cli 空白名单允许 bootstrap 配对
-	if (
-		config.requireAllowlist &&
-		config.allowedOpenIds.length === 0 &&
-		config.feishu.mode !== "lark-cli"
-	) {
-		errors.push({
-			code: "allowlist_required",
-			message: "requireAllowlist=true 但 allowedOpenIds 为空",
-		});
-	}
+	if (config.feishu.mode !== "native") errors.push({ code: "invalid_mode", message: `无效 feishu.mode: ${config.feishu.mode}` });
+	const hasUser = Boolean(config.feishu.userId?.trim());
+	const hasChat = Boolean(config.feishu.chatId?.trim());
+	if (hasChat) errors.push({ code: "chat_recipient_removed", message: "只支持唯一主人私聊，不再支持 feishu.chatId" });
+	if (config.allowedOpenIds.length > 0 && !hasUser) errors.push({ code: "missing_recipient", message: "已配置主人时必须设置 feishu.userId" });
+	if (config.allowedOpenIds.length > 1) errors.push({ code: "multiple_owners", message: "只支持唯一主人" });
+	if (config.requireAllowlist && config.allowedOpenIds.length === 0) errors.push({ code: "allowlist_required", message: "requireAllowlist=true 但 allowedOpenIds 为空" });
 
 	return errors;
 }
@@ -318,7 +278,7 @@ export function saveHubOwnerBinding(input: {
 	const mode =
 		(typeof existing.feishu?.mode === "string"
 			? existing.feishu.mode
-			: input.base?.feishu.mode) ?? "console";
+			: input.base?.feishu.mode) ?? "native";
 	const as =
 		(typeof existing.feishu?.as === "string"
 			? existing.feishu.as
@@ -348,7 +308,7 @@ export function saveHubOwnerBinding(input: {
 	return { configPath, config };
 }
 
-/** setup 成功后原子写 native mode；有真人 owner 则单主人绑定，否则清空旧主人进入 bootstrap。 */
+/** setup 成功后原子写 native mode 与唯一可信主人。 */
 export function saveNativeSetupConfig(input: {
 	configPath?: string;
 	base?: HubConfig;
@@ -360,21 +320,33 @@ export function saveNativeSetupConfig(input: {
 		try { existing = JSON.parse(readFileSync(configPath, "utf8")) as HubConfigFile; } catch { existing = {}; }
 	}
 	const owner = input.ownerOpenId?.trim();
+	if (!owner) throw new Error("可信主人 open_id 不能为空");
 	const nextFile: HubConfigFile = {
 		...existing,
-		allowedOpenIds: owner ? [owner] : [],
-		requireAllowlist: owner ? true : false,
+		allowedOpenIds: [owner],
+		requireAllowlist: true,
 		feishu: {
 			...(existing.feishu ?? {}),
 			mode: "native",
 			as: (existing.feishu?.as ?? input.base?.feishu.as ?? "bot"),
 		},
 	};
-	if (owner) nextFile.feishu!.userId = owner;
-	else delete nextFile.feishu!.userId;
+	nextFile.feishu!.userId = owner;
 	delete nextFile.feishu!.chatId;
 	writeConfigFileAtomic(configPath, nextFile);
 	return { configPath, config: loadHubConfig({ configPath, skipFile: false, env: {} }) };
+}
+
+/** reset：删除飞书运行配置与主人绑定，保留 host/port 等 Hub 配置。 */
+export function resetNativeConfig(input: { configPath?: string; base?: HubConfig } = {}): string {
+	const configPath = input.configPath?.trim() || input.base?.configPath?.trim() || defaultConfigPath();
+	let existing: HubConfigFile = {};
+	if (existsSync(configPath)) { try { existing = JSON.parse(readFileSync(configPath, "utf8")) as HubConfigFile; } catch { existing = {}; } }
+	delete existing.feishu;
+	delete existing.allowedOpenIds;
+	delete existing.requireAllowlist;
+	writeConfigFileAtomic(configPath, existing);
+	return configPath;
 }
 
 function writeConfigFileAtomic(configPath: string, value: HubConfigFile): void {

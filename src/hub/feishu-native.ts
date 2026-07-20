@@ -1,7 +1,7 @@
 import * as Lark from "@larksuiteoapi/node-sdk";
 import type { FeishuCredentials } from "./credentials.js";
-import type { InboundControlHandlers } from "./feishu-inbound.js";
-import { parseInboundEvent } from "./feishu-inbound.js";
+import type { InboundControlHandlers } from "./feishu-native-inbound.js";
+import { parseInboundEvent } from "./feishu-native-inbound.js";
 import type { FeishuOutboundMessage, FeishuSendResult, FeishuTransport } from "./feishu-transport.js";
 
 export type NativeClientLike = { im: { message: { create(input: unknown): Promise<any> } }; request?(input: unknown): Promise<any> };
@@ -11,7 +11,7 @@ export class NativeFeishuTransport implements FeishuTransport {
  private client: NativeClientLike;
  setRecipient(input: { userId?: string; chatId?: string }) { if (input.userId && input.chatId) throw new Error("原生飞书收件人不能同时设置 userId/chatId"); this.userId = input.userId; this.chatId = input.chatId; }
  async send(message: FeishuOutboundMessage): Promise<FeishuSendResult> {
-  const receiveId = this.userId ?? this.chatId; if (!receiveId) throw new Error("原生飞书尚未绑定主人，请执行 /lark-pair");
+  const receiveId = this.userId ?? this.chatId; if (!receiveId) throw new Error("原生飞书尚未绑定主人，请执行 /lark");
   try { const r = await this.client.im.message.create({ params: { receive_id_type: this.userId ? "open_id" : "chat_id" }, data: { receive_id: receiveId, msg_type: "text", content: JSON.stringify({ text: [message.title, message.body].filter(Boolean).join("\n") }) } }); const id = r?.data?.message_id ?? r?.message_id; if (!id) throw new Error("响应缺少 message_id"); return { messageId: id }; }
   catch (e) { throw new Error(`原生飞书发送失败：${e instanceof Error ? e.message : String(e)}`); }
  }

@@ -1,7 +1,7 @@
 {
   "name": "pi-lark-hub",
   "version": "0.1.0",
-  "description": "Pi coding agent multi-Pi Feishu remote control — pi-lark-hub + lark-bridge (register, route, task_end, approval, need_reply, optional lark-cli).",
+  "description": "Pi coding agent 多实例飞书原生遥控 Hub。",
   "type": "module",
   "license": "MIT",
   "author": "",
@@ -29,6 +29,7 @@
   },
   "files": [
     "src",
+    "pi-lark-hub.ts",
     "scripts",
     "docs",
     "README.md",
@@ -37,13 +38,13 @@
   ],
   "pi": {
     "extensions": [
-      "./src/index.ts"
+      "./pi-lark-hub.ts"
     ]
   },
   "scripts": {
     "check": "node --check src/index.ts || true",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/hub/router.test.ts src/hub/config.test.ts src/hub/feishu-lark-cli.test.ts src/hub/feishu-native.test.ts src/hub/feishu-registration.test.ts src/hub/credentials.test.ts src/hub/atomic-file.test.ts src/hub/pairing.test.ts src/lark-bridge/hub-autostart.test.ts src/lark-bridge/pair-qr.test.ts",
+    "test": "tsx --test src/pi-package.test.ts src/hub/router.test.ts src/hub/config.test.ts src/hub/feishu-native.test.ts src/hub/feishu-registration.test.ts src/hub/credentials.test.ts src/hub/atomic-file.test.ts src/lark-bridge/hub-autostart.test.ts",
     "hub": "tsx src/hub/cli.ts",
     "prepublishOnly": "npm run typecheck"
   },

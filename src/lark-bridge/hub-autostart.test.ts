@@ -14,7 +14,6 @@ import {
 	resetAutostartCooldownState,
 	resolveHubSpawnSpec,
 	resolvePackageRoot,
-	shouldAutoPair,
 	isHubCompatible,
 	isAutorestartEnabled,
 	stopStaleHub,
@@ -44,7 +43,7 @@ describe("isAutostartEnabled", () => {
 
 describe("Hub 过期检测", () => {
 	it("能力满足才兼容", () => {
-		assert.equal(isHubCompatible({ ok: true, features: ["pair_begin"] }), true);
+		assert.equal(isHubCompatible({ ok: true, features: ["lark_open", "lark_reset"] }), true);
 		assert.equal(isHubCompatible({ ok: true, features: [] }), false);
 		assert.equal(isHubCompatible({ ok: true }), false);
 	});
@@ -62,24 +61,6 @@ describe("Hub 过期检测", () => {
 	});
 });
 
-describe("shouldAutoPair", () => {
-	it("仅 needsPairing 且未尝试过",
-		() => {
-			assert.equal(
-				shouldAutoPair({ needsPairing: true, autoPairAttempted: false }),
-				true,
-			);
-			assert.equal(
-				shouldAutoPair({ needsPairing: true, autoPairAttempted: true }),
-				false,
-			);
-			assert.equal(
-				shouldAutoPair({ needsPairing: false, autoPairAttempted: false }),
-				false,
-			);
-		},
-	);
-});
 
 describe("hubUrlToHttpOrigin", () => {
 	it("解析默认 ws 与显式端口", () => {
@@ -199,7 +180,7 @@ describe("ensureHubRunning", () => {
 					return { ok: true, pid: 4242, features: [] };
 				}
 				if (phase === "down") return null;
-				return { ok: true, pid: 9999, features: ["pair_begin"] };
+				return { ok: true, pid: 9999, features: ["lark_open", "lark_reset"] };
 			},
 			probe: async () => phase !== "down",
 			killFn: (pid) => {

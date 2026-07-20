@@ -12,8 +12,6 @@ import {
 } from "./approvals.js";
 import { MessageBindingStore } from "./bindings.js";
 import { handleControlApproval, handleControlMessage } from "./control.js";
-import { PairingStore } from "./pairing.js";
-import { ConsoleFeishuTransport, NoopFeishuTransport } from "./feishu-transport.js";
 import { InstanceRegistry } from "./registry.js";
 import {
 	formatOnlineList,
@@ -258,51 +256,6 @@ describe("handleControlMessage", () => {
 		assert.match(r.reply, /无权限/);
 	});
 
-	it("配对口令优先于白名单且成功绑定", () => {
-		const reg = new InstanceRegistry();
-		const pairing = new PairingStore({ random: () => 0.1 });
-		const begun = pairing.begin("pi-a");
-		let bound: string | undefined;
-		const r = handleControlMessage(
-			{
-				registry: reg,
-				pairing,
-				isAuthorized: () => false,
-				onOwnerBound: (openId) => {
-					bound = openId;
-					return { ok: true, message: "ok-file" };
-				},
-			},
-			{ text: `配对 ${begun.code}`, openId: "ou_owner" },
-		);
-		assert.equal(bound, "ou_owner");
-		assert.equal(r.decision.kind, "pair");
-		if (r.decision.kind === "pair") assert.equal(r.decision.ok, true);
-		assert.match(r.reply, /已绑定/);
-	});
-
-	it("错码不调用 onOwnerBound", () => {
-		const reg = new InstanceRegistry();
-		const pairing = new PairingStore({ random: () => 0.2 });
-		pairing.begin();
-		let called = false;
-		const r = handleControlMessage(
-			{
-				registry: reg,
-				pairing,
-				isAuthorized: () => false,
-				onOwnerBound: () => {
-					called = true;
-					return { ok: true, message: "x" };
-				},
-			},
-			{ text: "配对 WRONG1", openId: "ou_x" },
-		);
-		assert.equal(called, false);
-		assert.equal(r.decision.kind, "pair");
-		if (r.decision.kind === "pair") assert.equal(r.decision.ok, false);
-	});
-
 	it("默认离线时清默认且不改投", () => {
 		const reg = new InstanceRegistry();
 		reg.register({
@@ -358,18 +311,6 @@ describe("MessageBindingStore", () => {
 		assert.equal(store.get("missing"), undefined);
 	});
 
-	it("need_reply 绑定保留 requestId 与 event", () => {
-		const store = new MessageBindingStore();
-		const b = store.bind({
-			messageId: "console-nr-1",
-			piId: "a1",
-			requestId: "nr-req-abc",
-			event: "need_reply",
-		});
-		assert.equal(b.event, "need_reply");
-		assert.equal(b.requestId, "nr-req-abc");
-		assert.equal(store.get("console-nr-1")?.requestId, "nr-req-abc");
-	});
 });
 
 describe("reply routing via handleControlMessage", () => {
@@ -408,38 +349,6 @@ describe("reply routing via handleControlMessage", () => {
 		assert.equal(r.replyToRequestId, "req-b");
 		assert.equal(r.decision.kind, "reply");
 		assert.equal(r.deliverText, "继续改 B");
-	});
-
-	it("need_reply 绑定：回复携带 replyToRequestId 供 bridge 关联", () => {
-		const reg = new InstanceRegistry();
-		const bindings = new MessageBindingStore();
-		reg.register({
-			piId: "a1",
-			displayName: "proj-a",
-			cwd: "/tmp/a",
-			pid: 1,
-			connectionId: "c1",
-		});
-		// need_reply 出站绑定（与 server.handleNotify 一致：含 requestId + event）
-		const requestId = "nr-req-001-xyz";
-		bindings.bind({
-			messageId: "console-need-reply-1",
-			piId: "a1",
-			requestId,
-			event: "need_reply",
-		});
-
-		const r = handleControlMessage(
-			{ registry: reg, bindings },
-			{ text: "用户的回答内容", replyToMessageId: "console-need-reply-1" },
-		);
-		assert.equal(r.deliveredTo, "a1");
-		assert.equal(r.source, "reply");
-		assert.equal(r.replyToRequestId, requestId);
-		assert.equal(r.deliverText, "用户的回答内容");
-		assert.equal(r.decision.kind, "reply");
-		// 绑定 event 信息可从 store 读出（调试 /notifications）
-		assert.equal(bindings.get("console-need-reply-1")?.event, "need_reply");
 	});
 
 	it("未绑定 replyTo 失败关闭，不改投默认", () => {
@@ -521,42 +430,6 @@ describe("reply routing via handleControlMessage", () => {
 		);
 		assert.equal(r.deliveredTo, "a1");
 		assert.equal(r.source, "default");
-	});
-});
-
-describe("FeishuTransport", () => {
-	it("ConsoleFeishuTransport 返回 console- messageId", async () => {
-		const t = new ConsoleFeishuTransport();
-		const r = await t.send({
-			title: "任务结束",
-			body: "摘要",
-			piId: "a1",
-			event: "task_end",
-			requestId: "r1",
-		});
-		assert.match(r.messageId, /^console-/);
-		assert.equal(t.history.length, 1);
-		assert.equal(t.history[0]?.piId, "a1");
-	});
-
-	it("NoopFeishuTransport 可注入 messageId", async () => {
-		const t = new NoopFeishuTransport({ idFactory: () => "noop-fixed" });
-		const r = await t.send({ body: "x", piId: "a1" });
-		assert.equal(r.messageId, "noop-fixed");
-		assert.equal(t.sent.length, 1);
-	});
-
-	it("sendApprovalCard 带 actions", async () => {
-		const t = new ConsoleFeishuTransport();
-		const r = await t.sendApprovalCard({
-			body: "rm -rf /",
-			piId: "a1",
-			event: "approval",
-			requestId: "req-card",
-			actions: ["approve", "reject"],
-		});
-		assert.match(r.messageId, /^console-/);
-		assert.match(t.history[0]?.body ?? "", /card actions/);
 	});
 });
 

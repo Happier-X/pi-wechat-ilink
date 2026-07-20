@@ -2,7 +2,7 @@
  * Pi × 飞书 Multi-Pi 桥接扩展（lark-bridge）。
  *
  * 连接本机 pi-lark-hub：注册、心跳、接收 user_message / approval_result、
- * 上报 task_end / 危险 bash 审批 / 显式 need_reply。
+ * 上报 task_end 与危险 bash 审批。
  * 远程文本走扩展自有 FIFO，禁止 pi.sendUserMessage(..., { deliverAs: "followUp" })。
  *
  * 加载方式：
@@ -11,9 +11,8 @@
  *   或 pi -e <本包绝对路径>/src/lark-bridge/index.ts
  *
  * 命令：
- *   /lark-status          Hub 连接与 piId
- *   /lark-ask [prompt]    显式请求飞书回复（need_reply）
- *   /lark-pair            飞书本人短码配对（5 分钟有效）
+ *   /lark                 连接或发起官方扫码
+ *   /lark reset           清理凭证并重新开局
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -30,13 +29,10 @@ import {
 } from "../protocol.js";
 import {
 	ensureHubRunning,
-	fetchHubPairingStatus,
-	hubUrlToHttpOrigin,
-	isAutostartEnabled,
-	shouldAutoPair,
+		isAutostartEnabled,
 	type EnsureHubResult,
 } from "./hub-autostart.js";
-import { openPathBestEffort, writePairQrPng, writeSetupQrPng } from "./pair-qr.js";
+import { openPathBestEffort, writeSetupQrPng } from "./setup-qr.js";
 
 const STATUS_KEY = "lark-bridge";
 const DEFAULT_HUB_URL = process.env.PI_LARK_HUB_URL ?? "ws://127.0.0.1:8765";
@@ -44,8 +40,6 @@ const HEARTBEAT_MS = 10_000;
 const RECONNECT_MS = 5_000;
 const SUMMARY_MAX = 800;
 const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
-const NEED_REPLY_TIMEOUT_MS = 10 * 60 * 1000;
-const DEFAULT_NEED_REPLY_PROMPT = "需要你的回复";
 
 /** 危险 bash 模式（拦截后走 hub 审批 / 本机 UI） */
 const DANGEROUS_PATTERNS: RegExp[] = [
@@ -68,15 +62,6 @@ type PendingApproval = {
 	createdAt: number;
 	resolve: (decision: Decision) => void;
 	promise: Promise<Decision>;
-	done: boolean;
-};
-
-type PendingNeedReply = {
-	requestId: string;
-	prompt: string;
-	createdAt: number;
-	resolve: (answer: string | null) => void;
-	promise: Promise<string | null>;
 	done: boolean;
 };
 
@@ -135,9 +120,6 @@ export default function larkBridge(pi: ExtensionAPI) {
 	let hubDownNotified = false;
 	let autostartFailureNotified = false;
 	/** 本进程是否已自动发起过配对（重连不再刷） */
-	let autoPairAttempted = false;
-	/** 下一次 pair_challenge 是否来自自动引导（仅文案） */
-	let autoPairPending = false;
 	let lastEnsureResult: EnsureHubResult | null = null;
 	let intentionalClose = false;
 	let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -149,10 +131,7 @@ export default function larkBridge(pi: ExtensionAPI) {
 	/** agent_end 缓存的助手摘要，settled 时用于 task_end */
 	let pendingAssistantSummary = "";
 	let lastNotifyAck: { requestId: string; messageId: string } | null = null;
-	let lastNeedReplyAnswer: { requestId: string; prompt: string; answer: string; at: number } | null =
-		null;
 	const approvals = new Map<string, PendingApproval>();
-	const needReplies = new Map<string, PendingNeedReply>();
 
 	const status = (text?: string) => {
 		if (activeCtx?.hasUI) activeCtx.ui.setStatus(STATUS_KEY, text);
@@ -162,33 +141,6 @@ export default function larkBridge(pi: ExtensionAPI) {
 		if (activeCtx?.hasUI) activeCtx.ui.notify(text, level);
 	};
 
-	/** register_ok 后：lark-cli 未绑定则本进程自动 pair_begin 一次 */
-	const maybeAutoPairAfterRegister = async () => {
-		if (!connected || !piId) return;
-		if (autoPairAttempted) return;
-
-		const origin = hubUrlToHttpOrigin(DEFAULT_HUB_URL);
-		if (!origin) return;
-
-		const st = await fetchHubPairingStatus(origin);
-		if (!st) return;
-
-		if (!shouldAutoPair({ needsPairing: st.needsPairing, autoPairAttempted })) {
-			return;
-		}
-
-		// 先占坑，避免 health 慢/并发 register 双发
-		autoPairAttempted = true;
-		autoPairPending = true;
-		const ok = send({ type: "pair_begin", piId });
-		if (!ok) {
-			autoPairPending = false;
-			// 允许后续重试一次（连接瞬时不可用）
-			autoPairAttempted = false;
-			return;
-		}
-		status("等待配对码…");
-	};
 
 	const clearTimers = () => {
 		if (heartbeatTimer) {
@@ -237,27 +189,6 @@ export default function larkBridge(pi: ExtensionAPI) {
 		return true;
 	};
 
-	const resolveNeedReply = (requestId: string, answer: string | null): boolean => {
-		const item = needReplies.get(requestId);
-		if (!item || item.done) return false;
-		item.done = true;
-		needReplies.delete(requestId);
-		item.resolve(answer);
-		return true;
-	};
-
-	/** 仅当回复绑定了对应 requestId 时消费 pending need_reply（不猜测纯文本） */
-	const tryConsumeNeedReply = (msg: UserMessage): boolean => {
-		const requestId = msg.replyToRequestId?.trim();
-		if (!requestId) return false;
-		if (msg.source !== "reply") return false;
-		const item = needReplies.get(requestId);
-		if (!item || item.done) return false;
-		const text = (msg.text ?? "").trim();
-		if (!text) return false;
-		return resolveNeedReply(requestId, text);
-	};
-
 	const tryDrainQueue = (ctx: ExtensionContext) => {
 		if (drainingQueue || !ctx.isIdle()) return;
 		if (currentFromHub) return;
@@ -286,11 +217,6 @@ export default function larkBridge(pi: ExtensionAPI) {
 	};
 
 	const handleUserMessage = (msg: UserMessage, ctx: ExtensionContext) => {
-		// need_reply 回答优先消费：不注入 agent，仅 resolve /lark-ask
-		if (tryConsumeNeedReply(msg)) {
-			return;
-		}
-
 		const text = (msg.text ?? "").trim();
 		if (!text) return;
 
@@ -358,7 +284,6 @@ export default function larkBridge(pi: ExtensionAPI) {
 				status(`飞书 Hub ✓ ${piId}`);
 				notify(`已注册到 pi-lark-hub\npiId: ${piId}`, "info");
 				startHeartbeat();
-				void maybeAutoPairAfterRegister();
 				return;
 			}
 			case "notify_ack": {
@@ -387,57 +312,13 @@ export default function larkBridge(pi: ExtensionAPI) {
 				notify(`Hub 错误：${msg.message}`, "warning");
 				return;
 			}
-			case "pair_challenge": {
-				const mins = Math.max(1, Math.round(msg.ttlMs / 60_000));
-				const fromAuto = autoPairPending;
-				autoPairPending = false;
-				status(`配对码 ${msg.code}`);
-				void (async () => {
-					const lines = [
-						fromAuto
-							? "首次使用：请完成飞书本人配对"
-							: "飞书本人配对",
-						`配对码：${msg.code}`,
-						`有效期：约 ${mins} 分钟`,
-						"请在飞书给机器人发送：",
-						`配对 ${msg.code}`,
-					];
-					const qr = await writePairQrPng(msg.code);
-					if (qr.ok) {
-						lines.push(`二维码已生成：${qr.path}`, "（已尝试系统打开图片；也可扫码查看口令后在飞书发送）");
-						openPathBestEffort(qr.path);
-					} else {
-						lines.push(
-							`（二维码生成失败，请直接使用上方短码：${qr.error}）`,
-						);
-					}
-					lines.push(
-						"（也可用 curl POST /control/message 模拟，body 含 openId）",
-					);
-					notify(lines.join("\n"), "info");
-				})();
-				return;
-			}
-			case "setup_challenge": {
+			case "lark_challenge": {
 				status("等待飞书扫码…");
 				void (async () => { const qr = await writeSetupQrPng(msg.url); const lines = ["请用飞书扫描官方授权二维码：", msg.url]; if (qr.ok) { lines.push(`二维码：${qr.path}`); openPathBestEffort(qr.path); } else lines.push(`二维码生成失败：${qr.error}`); notify(lines.join("\n"), "info"); })();
 				return;
 			}
-			case "setup_result": {
-				notify(`${msg.ok ? "飞书开局成功" : "飞书开局失败"}：${msg.message}${msg.needPair ? "\n请继续执行 /lark-pair。" : ""}`, msg.ok ? "info" : "warning");
-				if (msg.ok) status(connected && piId ? `飞书 Hub ✓ ${piId}` : undefined);
-				return;
-			}
-			case "pair_result": {
-				notify(
-					msg.ok
-						? `配对成功：${msg.message}${msg.openId ? `\nopenId: ${msg.openId}` : ""}`
-						: `配对失败：${msg.message}`,
-					msg.ok ? "info" : "warning",
-				);
-				if (msg.ok) status(connected && piId ? `飞书 Hub ✓ ${piId}` : undefined);
-				return;
-			}
+			case "lark_result": { notify(`${msg.ok ? "飞书操作成功" : "飞书操作失败"}：${msg.message}`, msg.ok ? "info" : "warning"); status(msg.connected && piId ? `飞书 Hub ✓ ${piId}` : `飞书 Hub ✓ ${piId ?? "-"} · 未开局`); return; }
+
 			default:
 				return;
 		}
@@ -609,14 +490,6 @@ export default function larkBridge(pi: ExtensionAPI) {
 			}
 		}
 		approvals.clear();
-		// 未决 need_reply 以 null 结束
-		for (const item of needReplies.values()) {
-			if (!item.done) {
-				item.done = true;
-				item.resolve(null);
-			}
-		}
-		needReplies.clear();
 		disconnectHub();
 		activeCtx = null;
 	});
@@ -767,203 +640,16 @@ export default function larkBridge(pi: ExtensionAPI) {
 		};
 	});
 
-	pi.registerCommand("lark-setup", {
-		description: "扫描飞书官方授权二维码，启用原生 OpenAPI + WebSocket",
+	pi.registerCommand("lark", {
+		description: "连接飞书原生运行时；使用 /lark reset 清理后重新扫码",
 		handler: async (args, ctx) => {
 			activeCtx = ctx;
-			if (!connected || !piId) { notify("尚未连接 Hub，请稍后重试 /lark-setup", "warning"); await connectHubWithEnsure(ctx); return; }
 			const arg = (args ?? "").trim().toLowerCase();
-			if (arg && arg !== "force") { notify("用法：/lark-setup [force]", "warning"); return; }
-			if (!send({ type: "setup_begin", piId, force: arg === "force" })) { notify("发送 setup_begin 失败", "error"); return; }
-			status("正在请求飞书授权二维码…");
-		},
-	});
-
-	pi.registerCommand("lark-pair", {
-		description: "发起飞书本人短码配对（5 分钟有效，用后即废）",
-		handler: async (_args, ctx) => {
-			activeCtx = ctx;
-			if (!connected || !piId) {
-				notify(
-					"尚未连接 Hub，正在尝试连接…请稍后重试 /lark-pair",
-					"warning",
-				);
-				await connectHubWithEnsure(ctx);
-				return;
-			}
-			const ok = send({ type: "pair_begin", piId });
-			if (!ok) {
-				notify("发送 pair_begin 失败：Hub 连接不可用", "error");
-				return;
-			}
-			status("等待配对码…");
-			notify("已请求配对码，请稍候…", "info");
-		},
-	});
-
-	pi.registerCommand("lark-status", {
-		description: "显示 pi-lark-hub 连接状态与 piId",
-		handler: async (_args, ctx) => {
-			activeCtx = ctx;
-			const lines = [
-				`Hub URL: ${DEFAULT_HUB_URL}`,
-				`连接: ${connected ? "已连接" : "未连接"}`,
-				`piId: ${piId ?? "（未注册）"}`,
-				`cwd: ${ctx.cwd || process.cwd()}`,
-				`displayName: ${displayNameFromCwd(ctx.cwd || process.cwd())}`,
-				`队列: ${queue.length}`,
-				`待审批: ${approvals.size}`,
-				`待回复 need_reply: ${needReplies.size}`,
-				`状态: ${ctx.isIdle() ? "空闲" : "执行中"}`,
-				lastNotifyAck
-					? `最近 notify_ack: ${lastNotifyAck.messageId} (${lastNotifyAck.requestId})`
-					: "最近 notify_ack: （无）",
-				lastNeedReplyAnswer
-					? `最近 need_reply 回答: ${lastNeedReplyAnswer.answer.slice(0, 80)} (req=${lastNeedReplyAnswer.requestId})`
-					: "最近 need_reply 回答: （无）",
-			];
-			if (ctx.hasUI) {
-				ctx.ui.notify(lines.join("\n"), "info");
-			} else {
-				console.log(lines.join("\n"));
-			}
-			if (!connected) {
-				connectHub(ctx);
-			}
-		},
-	});
-
-	/**
-	 * 显式 need_reply（Phase 4 MVP）：
-	 * - Hub 在线：发送 need_reply 通知；用户回复该消息后，经 binding.requestId 与 replyToRequestId 关联
-	 * - Hub 不可用：降级本机 ctx.ui.input（有 UI）
-	 * - 不自动 sendUserMessage；仅 notify + 记录 lastNeedReplyAnswer
-	 */
-	pi.registerCommand("lark-ask", {
-		description: "显式请求飞书回复（need_reply）；用户须回复对应通知消息",
-		handler: async (args, ctx) => {
-			activeCtx = ctx;
-			const prompt = (args ?? "").trim() || DEFAULT_NEED_REPLY_PROMPT;
-			const requestId = generateRequestId();
-			const hubOnline = connected && Boolean(piId);
-
-			// Hub 不可用：本机 UI 降级
-			if (!hubOnline) {
-				if (ctx.hasUI) {
-					try {
-						status("Hub 不可用 · 本机输入");
-						notify("pi-lark-hub 不可用，need_reply 改为本机输入。", "warning");
-						const answer = await ctx.ui.input(prompt, "在此输入回复", {
-							timeout: NEED_REPLY_TIMEOUT_MS,
-						});
-						const text = (answer ?? "").trim();
-						if (!text) {
-							notify("need_reply 已取消或为空", "warning");
-							status(undefined);
-							return;
-						}
-						lastNeedReplyAnswer = {
-							requestId,
-							prompt,
-							answer: text,
-							at: Date.now(),
-						};
-						notify(`need_reply 本机回答：${text}`, "info");
-						status(undefined);
-						return;
-					} catch {
-						notify("need_reply 本机输入取消或超时", "warning");
-						status(undefined);
-						return;
-					}
-				}
-				notify(
-					"pi-lark-hub 不可用且无本机 UI，无法完成 need_reply。请确认 Hub 已自动拉起或手动在包目录 npm run hub。",
-					"error",
-				);
-				return;
-			}
-
-			let resolver: (answer: string | null) => void = () => {};
-			const promise = new Promise<string | null>((resolve) => {
-				resolver = resolve;
-			});
-			const pending: PendingNeedReply = {
-				requestId,
-				prompt,
-				createdAt: Date.now(),
-				resolve: resolver,
-				promise,
-				done: false,
-			};
-			needReplies.set(requestId, pending);
-
-			const timer = setTimeout(() => {
-				resolveNeedReply(requestId, null);
-			}, NEED_REPLY_TIMEOUT_MS);
-			if (typeof timer.unref === "function") timer.unref();
-
-			const cwd = ctx.cwd || process.cwd();
-			const displayName = displayNameFromCwd(cwd);
-			const title = `❓ 需要回复 · ${displayName}`;
-			const body = [
-				`项目: ${displayName}`,
-				`piId: ${piId}`,
-				`cwd: ${cwd}`,
-				`事件: need_reply`,
-				`requestId: ${requestId}`,
-				"",
-				"提示:",
-				prompt,
-				"",
-				"请回复本条消息以回答（不走默认路由猜测）。",
-				`模拟: POST /control/message {\"text\":\"你的回答\",\"replyToMessageId\":\"<messageId>\"}`,
-			].join("\n");
-
-			const sent = send({
-				type: "notify",
-				piId: piId!,
-				event: "need_reply",
-				requestId,
-				title,
-				body,
-				timeoutMs: NEED_REPLY_TIMEOUT_MS,
-			});
-
-			if (!sent) {
-				clearTimeout(timer);
-				resolveNeedReply(requestId, null);
-				notify("need_reply 发送失败：Hub 连接不可用", "error");
-				return;
-			}
-
-			status(`等待飞书回复 ${requestId.slice(0, 12)}…`);
-			notify(
-				`已发送 need_reply
-requestId: ${requestId}
-提示: ${prompt}
-请用户回复该通知消息（GET /notifications 可查 messageId）`,
-				"info",
-			);
-
-			const answer = await pending.promise;
-			clearTimeout(timer);
-
-			if (answer === null) {
-				notify(`need_reply 超时或已取消（${requestId}）`, "warning");
-				status(connected && piId ? `飞书 Hub ✓ ${piId}` : undefined);
-				return;
-			}
-
-			lastNeedReplyAnswer = {
-				requestId,
-				prompt,
-				answer,
-				at: Date.now(),
-			};
-			// 仅本地展示，不自动注入 agent
-			notify(`need_reply 已收到回答（${requestId.slice(0, 12)}…）：\n${answer}`, "info");
-			status(connected && piId ? `飞书 Hub ✓ ${piId}` : undefined);
+			if (arg && arg !== "reset") { notify("用法：/lark 或 /lark reset", "warning"); return; }
+			if (!connected || !piId) { notify("尚未连接 Hub，正在重试，请稍后再次执行 /lark", "warning"); await connectHubWithEnsure(ctx); return; }
+			const type = arg === "reset" ? "lark_reset" : "lark_open";
+			if (!send({ type, piId } as PiToHubMessage)) { notify("飞书操作发送失败", "error"); return; }
+			status(arg === "reset" ? "正在重置飞书…" : "正在连接飞书…");
 		},
 	});
 }

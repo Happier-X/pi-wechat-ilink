@@ -20,15 +20,13 @@ import {
 } from "../protocol.js";
 import { ApprovalStore, DEFAULT_APPROVAL_TIMEOUT_MS } from "./approvals.js";
 import { MessageBindingStore } from "./bindings.js";
-import { defaultConfigPath, saveHubOwnerBinding, saveNativeSetupConfig, type HubConfig } from "./config.js";
-import { credentialsPath, loadCredentials, saveCredentials } from "./credentials.js";
+import { defaultConfigPath, resetNativeConfig, saveNativeSetupConfig, type HubConfig } from "./config.js";
+import { credentialsPath, deleteCredentials, loadCredentials, saveCredentials } from "./credentials.js";
 import { FeishuRegistrationClient } from "./feishu-registration.js";
 import { NativeFeishuTransport } from "./feishu-native.js";
 import { handleControlApproval, handleControlMessage } from "./control.js";
 import type { FeishuTransport } from "./feishu-transport.js";
-import { ConsoleFeishuTransport } from "./feishu-transport.js";
-import { LarkCliFeishuTransport } from "./feishu-lark-cli.js";
-import { computePairingHealth, PairingStore } from "./pairing.js";
+import { NoopFeishuTransport } from "./feishu-transport.js";
 import { DEFAULT_HEARTBEAT_TIMEOUT_MS, InstanceRegistry } from "./registry.js";
 
 export const DEFAULT_HUB_PORT = 8765;
@@ -51,16 +49,8 @@ export type HubServerOptions = {
 	feishu?: FeishuTransport;
 	bindings?: MessageBindingStore;
 	approvals?: ApprovalStore;
-	/**
-	 * 白名单 openId。
-	 * - 空 + consoleAllowEmptyAllowlist：console 开发放行
-	 * - 空 + 非 console：仅配对口令可过（bootstrap）
-	 */
+	/** 唯一可信主人 openId；未开局时为空并拒绝所有飞书入站。 */
 	allowedOpenIds?: string[];
-	/** console 且白名单为空时是否放行所有人；默认 true */
-	consoleAllowEmptyAllowlist?: boolean;
-	/** 配对码会话；默认新建 */
-	pairing?: PairingStore;
 	/** 用于落盘绑定的配置路径/基线 */
 	hubConfig?: HubConfig;
 	log?: (line: string) => void;
@@ -73,7 +63,7 @@ export type HubServerOptions = {
 	 * 可选：启动后调用（例如挂载飞书 event consume）。
 	 * 接收已绑定的 control 回调；失败不应抛弃 Hub。
 	 */
-	onReady?: (hub: HubServer) => void | Promise<void>;
+	onReady?: (hub: HubServer) => void | (() => void) | Promise<void | (() => void)>;
 };
 
 export type ControlDeliveryResult = {
@@ -124,15 +114,12 @@ export async function startHubServer(options: HubServerOptions = {}): Promise<Hu
 		options.port ??
 		(Number.isFinite(envPort) && envPort > 0 ? envPort : DEFAULT_HUB_PORT);
 	const log = options.log ?? ((line: string) => console.log(line));
-	let feishu = options.feishu ?? new ConsoleFeishuTransport();
+	let feishu: FeishuTransport = options.feishu ?? new NoopFeishuTransport();
 	const registration = options.registration ?? new FeishuRegistrationClient();
 	const bindings = options.bindings ?? new MessageBindingStore();
-	const pairing = options.pairing ?? new PairingStore();
 	const allowed = new Set(options.allowedOpenIds ?? []);
 	let hubConfigSnapshot = options.hubConfig;
-	const consoleAllowEmpty =
-		options.consoleAllowEmptyAllowlist ??
-		(options.hubConfig?.feishu.mode === "console" || !options.hubConfig);
+
 
 	const registry = new InstanceRegistry({
 		heartbeatTimeoutMs: options.heartbeatTimeoutMs ?? DEFAULT_HEARTBEAT_TIMEOUT_MS,
@@ -141,81 +128,17 @@ export async function startHubServer(options: HubServerOptions = {}): Promise<Hu
 
 	const clients = new Map<string, ClientState>();
 	const piSockets = new Map<string, WebSocket>(); // piId → socket
-	/** 最近一次 pair_begin 的 pi，用于 pair_result 优先通知 */
-	let lastPairPiId: string | null = null;
 	let setupInFlight = false;
 	let setupAbort: AbortController | null = null;
+	let setupTask: Promise<void> | null = null;
 	let nativeRuntimeStop: (() => void) | undefined;
 
 	const isAuthorized = (openId?: string): boolean => {
-		if (allowed.size === 0) {
-			// console 开发：空名单放行；lark-cli bootstrap：非配对消息一律拒绝
-			return consoleAllowEmpty;
-		}
+		if (allowed.size === 0) return false;
 		if (!openId) return false;
 		return allowed.has(openId);
 	};
 
-	const notifyPairResult = (input: {
-		ok: boolean;
-		openId?: string;
-		message: string;
-		preferPiId?: string;
-	}) => {
-		const msg: HubToPiMessage = {
-			type: "pair_result",
-			ok: input.ok,
-			openId: input.openId,
-			message: input.message,
-		};
-		if (input.preferPiId && sendToPi(input.preferPiId, msg)) return;
-		for (const [piId] of piSockets) {
-			sendToPi(piId, msg);
-		}
-	};
-
-	const onOwnerBound = (openId: string): { ok: boolean; message: string } => {
-		try {
-			const saved = saveHubOwnerBinding({
-				openId,
-				base: hubConfigSnapshot,
-				configPath: hubConfigSnapshot?.configPath,
-			});
-			hubConfigSnapshot = saved.config;
-			allowed.clear();
-			allowed.add(openId);
-
-			if (feishu instanceof LarkCliFeishuTransport || feishu instanceof NativeFeishuTransport) {
-				try {
-					feishu.setRecipient({ userId: openId });
-				} catch (error) {
-					const msg = error instanceof Error ? error.message : String(error);
-					log(`[hub] 更新 lark-cli 收件人失败: ${msg}`);
-				}
-			}
-
-			notifyPairResult({
-				ok: true,
-				openId,
-				message: `绑定成功，配置已写入 ${saved.configPath}`,
-				preferPiId: lastPairPiId ?? undefined,
-			});
-			log(`[hub] owner bound openId=${openId.slice(0, 8)}… path=${saved.configPath}`);
-			return {
-				ok: true,
-				message: `配置: ${saved.configPath}。若设置了 PI_LARK_ALLOWED_OPEN_IDS 等环境变量，重启后可能覆盖文件，请清理相关 env。`,
-			};
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			notifyPairResult({
-				ok: false,
-				openId,
-				message: `保存配置失败：${message}`,
-				preferPiId: lastPairPiId ?? undefined,
-			});
-			return { ok: false, message };
-		}
-	};
 
 	const isPiSocketOnline = (piId: string): boolean => {
 		const socket = piSockets.get(piId);
@@ -287,9 +210,7 @@ export async function startHubServer(options: HubServerOptions = {}): Promise<Hu
 		registry,
 		bindings,
 		approvals,
-		pairing,
 		isAuthorized,
-		onOwnerBound,
 	};
 
 	const handleNotify = async (client: ClientState, m: NotifyMessage) => {
@@ -364,42 +285,67 @@ export async function startHubServer(options: HubServerOptions = {}): Promise<Hu
 		}
 	};
 
-	const handleSetup = async (client: ClientState, force = false) => {
+	const handleSetup = async (client: ClientState) => {
 		if (!client.piId) return;
 		if (setupInFlight) { safeSend(client.socket, { type: "error", message: "已有扫码开局正在进行，请等待其结束" }); return; }
 		const file = options.credentialsFile ?? credentialsPath();
-		if (!force && loadCredentials(file)) { safeSend(client.socket, { type: "error", message: "已有原生飞书凭证；如需覆盖请使用 /lark-setup force" }); return; }
+		const existing = loadCredentials(file);
+		if (existing) {
+			const configuredOwner = hubConfigSnapshot?.feishu.userId?.trim();
+			if (allowed.size !== 1 || !configuredOwner || [...allowed][0] !== configuredOwner) { safeSend(client.socket, { type: "lark_result", ok: false, connected: false, message: "凭证缺少一致的可信主人配置，请执行 /lark reset 后重新扫码" }); return; }
+			setupInFlight = true;
+			let stop: (() => void) | undefined;
+			try {
+				const candidate = new NativeFeishuTransport(existing, { userId: configuredOwner });
+				const bot = await candidate.probeBotOpenId();
+				if (!bot || configuredOwner === bot) {
+					throw new Error("无法验证可信真人主人，请执行 /lark reset 后重新扫码");
+				}
+				const started = await options.onNativeRuntime?.(candidate, existing, hub);
+				stop = typeof started === "function" ? started : undefined;
+				nativeRuntimeStop?.(); nativeRuntimeStop = stop; feishu = candidate; hub.feishu = candidate;
+				safeSend(client.socket, { type: "lark_result", ok: true, connected: true, message: "原生飞书连接已确认" });
+			} catch (e) { stop?.(); safeSend(client.socket, { type: "lark_result", ok: false, connected: false, message: `原生飞书重连失败：${e instanceof Error ? e.message : String(e)}` }); }
+			finally { setupInFlight = false; }
+			return;
+		}
 		setupInFlight = true;
 		const abort = new AbortController(); setupAbort = abort;
 		const previous = { feishu, allowed: [...allowed], config: hubConfigSnapshot, stop: nativeRuntimeStop };
 		let candidateStop: (() => void) | undefined;
+		let credentialsSaved = false;
 		try {
 			const challenge = await registration.begin();
-			safeSend(client.socket, { type: "setup_challenge", url: challenge.url, expiresAt: challenge.expiresAt, ttlMs: challenge.expiresAt - Date.now() });
+			safeSend(client.socket, { type: "lark_challenge", url: challenge.url, expiresAt: challenge.expiresAt, ttlMs: challenge.expiresAt - Date.now() });
 			const result = await registration.poll(challenge, abort.signal);
 			// O1：先以无收件人状态启动原生运行时；只有确认扫码用户是真人后才设置收件人。
 			const native = new NativeFeishuTransport(result.credentials);
 			let owner: string | undefined;
-			try {
-				const bot = await native.probeBotOpenId();
-				if (result.ownerOpenId && bot && result.ownerOpenId !== bot) owner = result.ownerOpenId;
-			} catch { /* bot 探测失败必须 fail-closed，不绑定主人 */ }
+			const bot = await native.probeBotOpenId();
+			if (!result.ownerOpenId || !bot || result.ownerOpenId === bot) throw new Error("registration 未返回可信真人 open_id");
+			owner = result.ownerOpenId;
 			const startedRuntime = await options.onNativeRuntime?.(native, result.credentials, hub);
 			candidateStop = typeof startedRuntime === "function" ? startedRuntime : undefined;
 			const currentPath = hubConfigSnapshot?.configPath ?? defaultConfigPath();
 			saveCredentials(result.credentials, file);
+			credentialsSaved = true;
 			const saved = saveNativeSetupConfig({ configPath: currentPath, base: hubConfigSnapshot, ownerOpenId: owner });
-			if (previous.stop && previous.stop !== candidateStop) previous.stop();
+			if (previous.stop && previous.stop !== candidateStop) {
+				try { previous.stop(); } catch (error) {
+					log(`[hub] 停止旧原生运行时失败：${error instanceof Error ? error.message : String(error)}`);
+				}
+			}
 			if (owner) { allowed.clear(); allowed.add(owner); native.setRecipient({ userId: owner }); }
 			else allowed.clear();
 			feishu = native; hub.feishu = native; nativeRuntimeStop = candidateStop;
 			hubConfigSnapshot = saved.config;
-			safeSend(client.socket, { type: "setup_result", ok: true, appId: result.credentials.appId, ownerBound: Boolean(owner), needPair: !owner, message: owner ? "扫码开局成功，主人已绑定" : "凭证已保存并启用原生模式，请执行 /lark-pair 完成本人绑定" });
+			safeSend(client.socket, { type: "lark_result", ok: true, appId: result.credentials.appId, connected: true, message: "扫码开局成功，主人已绑定" });
 		} catch (e) {
+			if (credentialsSaved) deleteCredentials(file);
 			if (candidateStop) { try { candidateStop(); } catch { /* ignore */ } }
 			feishu = previous.feishu; hub.feishu = previous.feishu; allowed.clear(); previous.allowed.forEach((id) => allowed.add(id)); hubConfigSnapshot = previous.config; nativeRuntimeStop = previous.stop;
 			const message = e instanceof Error ? e.message.replace(/app_secret|client_secret|secret/gi, "密钥") : "扫码开局失败";
-			safeSend(client.socket, { type: "setup_result", ok: false, ownerBound: false, needPair: true, message });
+			safeSend(client.socket, { type: "lark_result", ok: false, connected: false, message });
 		} finally { setupAbort = null; setupInFlight = false; }
 	};
 
@@ -497,34 +443,8 @@ export async function startHubServer(options: HubServerOptions = {}): Promise<Hu
 				log(`[hub] unregister piId=${m.piId}`);
 				return;
 			}
-			case "setup_begin": {
-				const m = msg as Extract<PiToHubMessage, { type: "setup_begin" }>;
-				if (!client.piId || m.piId !== client.piId) { safeSend(client.socket, { type: "error", message: "setup_begin 失败：piId 与连接不一致" }); return; }
-				void handleSetup(client, m.force === true);
-				return;
-			}
-			case "pair_begin": {
-				const m = msg as Extract<PiToHubMessage, { type: "pair_begin" }>;
-				if (!client.piId || m.piId !== client.piId) {
-					safeSend(client.socket, {
-						type: "error",
-						message: "pair_begin 失败：piId 与连接绑定不一致",
-					});
-					return;
-				}
-				const begun = pairing.begin(client.piId);
-				lastPairPiId = client.piId;
-				safeSend(client.socket, {
-					type: "pair_challenge",
-					code: begun.code,
-					expiresAt: begun.expiresAt,
-					ttlMs: begun.ttlMs,
-				});
-				log(
-					`[hub] pair_begin piId=${client.piId} expiresInMs=${begun.ttlMs}`,
-				);
-				return;
-			}
+			case "lark_open": { const m = msg as Extract<PiToHubMessage, { type: "lark_open" }>; if (!client.piId || m.piId !== client.piId) { safeSend(client.socket, { type: "error", message: "lark 操作失败：piId 不一致" }); return; } if (!setupTask) setupTask = handleSetup(client).finally(() => { setupTask = null; }); else safeSend(client.socket, { type: "error", message: "已有扫码开局正在进行，请等待其结束" }); return; }
+			case "lark_reset": { const m = msg as Extract<PiToHubMessage, { type: "lark_reset" }>; if (!client.piId || m.piId !== client.piId) { safeSend(client.socket, { type: "error", message: "lark reset 失败：piId 不一致" }); return; } void (async () => { try { setupAbort?.abort(); await setupTask; nativeRuntimeStop?.(); nativeRuntimeStop = undefined; deleteCredentials(options.credentialsFile ?? credentialsPath()); resetNativeConfig({ configPath: hubConfigSnapshot?.configPath, base: hubConfigSnapshot }); allowed.clear(); hubConfigSnapshot = undefined; feishu = new NoopFeishuTransport(); hub.feishu = feishu; safeSend(client.socket, { type: "lark_result", ok: true, connected: false, reset: true, message: "飞书原生凭证、配置和主人绑定已清理" }); } catch (e) { safeSend(client.socket, { type: "lark_result", ok: false, connected: false, reset: true, message: e instanceof Error ? e.message : String(e) }); } })(); return; }
 			default:
 				safeSend(client.socket, {
 					type: "error",
@@ -555,10 +475,7 @@ export async function startHubServer(options: HubServerOptions = {}): Promise<Hu
 		const method = req.method ?? "GET";
 
 		if (method === "GET" && url.pathname === "/health") {
-			const pairingHealth = computePairingHealth({
-				feishuMode: hubConfigSnapshot?.feishu.mode,
-				allowlistSize: allowed.size,
-			});
+			const pairingHealth = { feishuMode: "native", ownerBound: allowed.size > 0, needsPairing: allowed.size === 0 };
 			json(res, 200, {
 				ok: true,
 				pid: process.pid,
@@ -776,7 +693,8 @@ export async function startHubServer(options: HubServerOptions = {}): Promise<Hu
 
 	if (options.onReady) {
 		try {
-			await options.onReady(hub);
+			const initialStop = await options.onReady(hub);
+			if (typeof initialStop === "function") nativeRuntimeStop = initialStop;
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			log(`[hub] onReady 失败（Hub 继续运行）: ${message}`);
