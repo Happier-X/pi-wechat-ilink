@@ -1,58 +1,20 @@
-# 实现清单：原生飞书扫码开局
+# 实现清单：统一 `/lark`
 
-## 验证命令
+## 清单
 
-```bash
-npm run typecheck
-npm test
-```
+1. [x] 协议收敛为 lark_open/reset/challenge/result，删除 pair、setup 旧协议和 need_reply event。
+2. [x] 配置仅保留 native 所需字段，新增 reset 原子清理。
+3. [x] 删除 PairingStore、console/lark-cli transport 与 inbound。
+4. [x] Server 实现可信 owner 的事务式 setup、已有凭证连接确保、reset。
+5. [x] CLI 仅启动 native 或未配置占位状态。
+6. [x] Bridge 只注册 `/lark`，参数仅允许 `reset`；删除 need_reply 和自动 pair。
+7. [x] 二维码工具只保留官方 setup URL PNG。
+8. [x] 更新 README、docs、spec、测试与 package 脚本。
+9. [x] 运行 `npm run typecheck`、`npm test`、`git diff --check`。
 
-## 有序清单
+## 删除文件
 
-### A. 配置与凭证
-
-1. [x] `feishu.mode` 增加 `native`；校验与 `formatConfigSummary` 不打印 secret
-2. [x] `credentials.json` 读写模块（路径、原子写、env 覆盖）
-3. [x] 文档 `docs/lark-hub.md` / README：mode、credentials、命令
-
-### B. Registration + 协议
-
-4. [x] `src/hub/feishu-registration.ts`：init/begin/poll（可注入 fetch）
-5. [x] 协议：`setup_begin` / `setup_challenge` / `setup_result`
-6. [x] Hub server：单会话 setup、force 门禁、bot open_id 校验、落盘顺序
-7. [x] Bridge：`/lark-setup`、`force`；challenge 用 URL 写独立 setup PNG；result 文案
-
-### C. 原生出站
-
-8. [x] 依赖：`@larksuiteoapi/node-sdk`（或最小 HTTP 封装）
-9. [x] `NativeFeishuTransport` + 单测（mock）
-10. [x] cli/server 按 mode 创建 transport
-
-### D. 原生入站
-
-11. [x] `NativeFeishuWsInbound`：WS + 消息解析 → 现有 control 管道
-12. [x] 与 lark-cli inbound 互斥启动；stop/cleanup
-13. [x] 单测：事件 fixture
-
-### E. 热切换与收尾
-
-14. [x] `applyNativeRuntime`：探测 → 切换 → 失败回滚
-15. [x] 回归：pairing / lark-cli / console / autostart
-16. [x] `.trellis/spec/backend/multi-pi-lark-hub.md` 等合约更新
-17. [x] typecheck + 全量测试（115 全绿）
-
-## 风险文件
-
-- `src/hub/server.ts`、`cli.ts`、`config.ts`
-- `src/protocol.ts`
-- `src/lark-bridge/index.ts`、`pair-qr.ts`
-- `package.json` dependencies
-
-## 回滚点
-
-- 去掉 native mode / 依赖，保留 setup 代码删除
-- credentials 文件可手动删
-
-## 子任务建议（可选）
-
-若单 PR 过大，按 A+B → C → D → E 拆分 PR；本父任务可在 start 后用 `task.py create --parent` 建子任务。
+- `src/hub/pairing.ts` 及测试
+- `src/hub/feishu-lark-cli.ts` 及测试
+- `src/hub/feishu-inbound.ts`（其通用解析迁入 native 模块）
+- 旧 pair QR 测试与兼容接口
