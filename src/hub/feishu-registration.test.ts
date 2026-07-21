@@ -158,4 +158,43 @@ describe("FeishuRegistrationClient", () => {
 		assert.equal(result.credentials.brand, "lark");
 		assert.ok(bases.some((url) => url.startsWith("https://accounts.larksuite.com/")));
 	});
+
+	it("poll 将 HTTP 400 的 authorization_pending 视为等待而非失败", async () => {
+		const replies: Array<{ body: unknown; ok: boolean; status: number }> = [
+			{ body: { supported_auth_methods: ["client_secret"] }, ok: true, status: 200 },
+			{
+				body: {
+					device_code: "dc",
+					verification_uri_complete: "https://open.feishu.cn/page/launcher?user_code=2",
+					expires_in: 60,
+					interval: 0.001,
+				},
+				ok: true,
+				status: 200,
+			},
+			{
+				body: { error: "authorization_pending", error_description: "waiting for user" },
+				ok: false,
+				status: 400,
+			},
+			{
+				body: {
+					client_id: "cli_wait",
+					client_secret: "secret",
+					user_info: { open_id: "ou_wait" },
+				},
+				ok: true,
+				status: 200,
+			},
+		];
+		const client = new FeishuRegistrationClient(async () => {
+			const next = replies.shift()!;
+			return response(next.body, next.ok, next.status);
+		});
+		const challenge = await client.begin(Date.now());
+		challenge.intervalMs = 1;
+		const result = await client.poll(challenge);
+		assert.equal(result.credentials.appId, "cli_wait");
+		assert.equal(result.ownerOpenId, "ou_wait");
+	});
 });

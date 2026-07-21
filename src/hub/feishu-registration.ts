@@ -8,6 +8,9 @@ type Fetch = typeof fetch;
 type Json = Record<string, unknown>;
 type FormParams = Record<string, string>;
 
+/** OAuth device-flow 等待状态：不算失败，继续 poll。飞书可能用 HTTP 400 携带这些码。 */
+const PENDING_ERRORS = new Set(["authorization_pending", "pending", "slow_down"]);
+
 async function post(fetchFn: Fetch, base: string, params: FormParams): Promise<Json> {
 	const body = new URLSearchParams(params);
 	const response = await fetchFn(`${base}${PATH}`, {
@@ -24,10 +27,21 @@ async function post(fetchFn: Fetch, base: string, params: FormParams): Promise<J
 		}
 		throw new Error("飞书注册服务返回了无法解析的响应");
 	}
-	if (!response.ok) {
+	// 与 cc-connect 一致：以响应体 OAuth 字段为准；pending 不因 HTTP 状态失败。
+	const code = oauthErrorCode(json);
+	if (!response.ok && !(code && PENDING_ERRORS.has(code))) {
 		throw new Error(err(json) ?? `飞书注册服务返回 HTTP ${response.status}`);
 	}
 	return json;
+}
+
+function oauthErrorCode(j: Json): string | undefined {
+	if (typeof j.error === "string" && j.error.trim()) return j.error.trim();
+	const nestedError = j.error && typeof j.error === "object" ? (j.error as Json) : undefined;
+	if (typeof nestedError?.code === "string" && nestedError.code.trim()) return nestedError.code.trim();
+	const nestedData = j.data && typeof j.data === "object" ? (j.data as Json) : undefined;
+	if (typeof nestedData?.error === "string" && nestedData.error.trim()) return nestedData.error.trim();
+	return undefined;
 }
 
 function err(j: Json): string | undefined {
@@ -183,15 +197,7 @@ export class FeishuRegistrationClient {
 				continue;
 			}
 
-			const e = err(j);
-			if (e === "authorization_pending" || e === "pending") continue;
-			if (e === "slow_down") {
-				delay += 5000;
-				continue;
-			}
-			if (e === "expired_token") throw new Error("二维码已过期");
-			if (e === "access_denied") throw new Error("用户拒绝了飞书授权");
-
+			// 先判成功，再处理 pending；避免误把等待码当失败。
 			if (
 				typeof d.client_id === "string" &&
 				typeof d.client_secret === "string" &&
@@ -212,8 +218,16 @@ export class FeishuRegistrationClient {
 				};
 			}
 
+			const e = oauthErrorCode(j) ?? err(j);
+			if (e === "authorization_pending" || e === "pending") continue;
+			if (e === "slow_down") {
+				delay += 5000;
+				continue;
+			}
+			if (e === "expired_token") throw new Error("二维码已过期，请重新执行 /lark");
+			if (e === "access_denied") throw new Error("用户拒绝了飞书授权");
 			if (e) throw new Error(`飞书扫码失败：${e}`);
-			throw new Error("飞书注册成功响应缺少 client_id/client_secret");
+			throw new Error("飞书注册响应缺少 client_id/client_secret，请重新执行 /lark");
 		}
 		throw new Error("飞书扫码开局超时");
 	}
