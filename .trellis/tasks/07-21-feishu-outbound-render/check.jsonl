@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/multi-pi-lark-hub.md", "reason": "出站仍须返回可绑定 message_id；不改 loopback 与开局"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "卡片失败降级 text；双失败才报错；禁止 secret"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "typecheck/test 与合约一致性"}
+{"file": ".trellis/tasks/07-21-feishu-outbound-render/prd.md", "reason": "验收 R1–R8"}
+{"file": ".trellis/tasks/07-21-feishu-outbound-render/design.md", "reason": "卡片结构与截断常量"}

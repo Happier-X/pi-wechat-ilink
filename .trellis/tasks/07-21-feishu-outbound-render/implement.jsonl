@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/multi-pi-lark-hub.md", "reason": "native 出站合约与 message_id 绑定规则"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "发送失败降级与密钥脱敏"}
+{"file": ".trellis/tasks/07-21-feishu-outbound-render/prd.md", "reason": "需求与验收"}
+{"file": ".trellis/tasks/07-21-feishu-outbound-render/design.md", "reason": "卡片 JSON、截断、降级顺序"}
+{"file": ".trellis/tasks/07-21-feishu-outbound-render/implement.md", "reason": "实现清单与验证命令"}
