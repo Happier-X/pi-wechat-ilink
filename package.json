@@ -44,7 +44,7 @@
   "scripts": {
     "check": "node --check src/index.ts || true",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/pi-package.test.ts src/hub/router.test.ts src/hub/config.test.ts src/hub/feishu-native.test.ts src/hub/feishu-outbound-format.test.ts src/hub/feishu-registration.test.ts src/hub/credentials.test.ts src/hub/atomic-file.test.ts src/lark-bridge/hub-autostart.test.ts",
+    "test": "tsx --test src/pi-package.test.ts src/protocol.test.ts src/hub/router.test.ts src/hub/config.test.ts src/hub/feishu-native.test.ts src/hub/feishu-outbound-format.test.ts src/hub/feishu-registration.test.ts src/hub/credentials.test.ts src/hub/atomic-file.test.ts src/lark-bridge/hub-autostart.test.ts",
     "hub": "tsx src/hub/cli.ts",
     "prepublishOnly": "npm run typecheck"
   },

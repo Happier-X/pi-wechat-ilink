@@ -9,7 +9,8 @@ import { createRequire } from "node:module";
 import { WebSocketServer, WebSocket } from "ws";
 import {
 	generatePiId,
-	parseProtocolMessage,
+	decodePiToHubMessage,
+	formatProtocolDecodeError,
 	serializeMessage,
 	type Capability,
 	type HubToPiMessage,
@@ -350,13 +351,17 @@ export async function startHubServer(options: HubServerOptions = {}): Promise<Hu
 	};
 
 	const handlePiMessage = (client: ClientState, raw: string) => {
-		const msg = parseProtocolMessage(raw);
-		if (!msg || !("type" in msg)) {
-			safeSend(client.socket, { type: "error", message: "无法解析的消息" });
+		const decoded = decodePiToHubMessage(raw);
+		if (!decoded.ok) {
+			safeSend(client.socket, {
+				type: "error",
+				message: formatProtocolDecodeError(decoded),
+			});
 			return;
 		}
+		const msg = decoded.message;
 
-		switch ((msg as PiToHubMessage).type) {
+		switch (msg.type) {
 			case "register": {
 				const m = msg as Extract<PiToHubMessage, { type: "register" }>;
 				let piId = (m.piId && m.piId.trim()) || "";
@@ -606,8 +611,14 @@ export async function startHubServer(options: HubServerOptions = {}): Promise<Hu
 		log(`[hub] ws connected ${connectionId}`);
 
 		socket.on("message", (data) => {
-			const raw = typeof data === "string" ? data : data.toString("utf8");
-			handlePiMessage(client, raw);
+			try {
+				const raw = typeof data === "string" ? data : data.toString("utf8");
+				handlePiMessage(client, raw);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				log(`[hub] 处理 Pi 消息异常 ${connectionId}: ${message}`);
+				safeSend(client.socket, { type: "error", message: "处理消息时发生内部错误" });
+			}
 		});
 
 		socket.on("close", () => {

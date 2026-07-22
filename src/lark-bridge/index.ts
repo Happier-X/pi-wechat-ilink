@@ -19,7 +19,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import WebSocket from "ws";
 import {
 	generateRequestId,
-	parseProtocolMessage,
+	decodeHubToPiMessage,
 	serializeMessage,
 	type ApprovalDecision,
 	type HubToPiMessage,
@@ -272,8 +272,9 @@ export default function larkBridge(pi: ExtensionAPI) {
 	};
 
 	const handleHubMessage = (raw: string) => {
-		const msg = parseProtocolMessage(raw) as HubToPiMessage | null;
-		if (!msg) return;
+		const decoded = decodeHubToPiMessage(raw);
+		if (!decoded.ok) return;
+		const msg: HubToPiMessage = decoded.message;
 
 		switch (msg.type) {
 			case "register_ok": {
@@ -414,8 +415,12 @@ export default function larkBridge(pi: ExtensionAPI) {
 		});
 
 		ws.on("message", (data) => {
-			const raw = typeof data === "string" ? data : data.toString("utf8");
-			handleHubMessage(raw);
+			try {
+				const raw = typeof data === "string" ? data : data.toString("utf8");
+				handleHubMessage(raw);
+			} catch {
+				// 畸形或处理异常不得拖垮扩展
+			}
 		});
 
 		ws.on("close", () => {
