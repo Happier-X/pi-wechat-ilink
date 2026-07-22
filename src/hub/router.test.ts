@@ -16,6 +16,7 @@ import { InstanceRegistry } from "./registry.js";
 import {
 	formatOnlineList,
 	isListCommand,
+	parseQueueCommand,
 	parseUseCommand,
 	routePlainText,
 	routeUseCommand,
@@ -134,6 +135,13 @@ describe("command parsers", () => {
 		assert.equal(parseUseCommand("use proj-a"), "proj-a");
 		assert.equal(parseUseCommand("列表"), null);
 	});
+
+	it("parseQueueCommand", () => {
+		assert.deepEqual(parseQueueCommand("队列"), { action: "list" });
+		assert.deepEqual(parseQueueCommand("清空队列"), { action: "clear" });
+		assert.deepEqual(parseQueueCommand("取消 qab1"), { action: "cancel", id: "qab1" });
+		assert.equal(parseQueueCommand("取消"), null);
+	});
 });
 
 describe("InstanceRegistry", () => {
@@ -211,6 +219,22 @@ describe("InstanceRegistry", () => {
 });
 
 describe("handleControlMessage", () => {
+	it("队列命令投递 queueControl", () => {
+		const reg = new InstanceRegistry({ heartbeatTimeoutMs: 30_000 });
+		reg.register({
+			piId: "pi-q",
+			displayName: "q",
+			cwd: "/tmp/q",
+			pid: 1,
+			capabilities: [],
+			connectionId: "c-q",
+		});
+		const r = handleControlMessage({ registry: reg }, { text: "队列", openId: "ou_x" });
+		assert.equal(r.decision.kind, "queue");
+		assert.equal(r.queueControl?.action, "list");
+		assert.equal(r.queueControl?.piId, "pi-q");
+	});
+
 	it("状态命令返回诊断文本", () => {
 		const reg = new InstanceRegistry({ heartbeatTimeoutMs: 30_000 });
 		reg.register({

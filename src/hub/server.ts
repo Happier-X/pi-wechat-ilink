@@ -522,6 +522,26 @@ export async function startHubServer(options: HubServerOptions = {}): Promise<Hu
 				);
 				return;
 			}
+			case "queue_report": {
+				const m = msg as Extract<PiToHubMessage, { type: "queue_report" }>;
+				if (!client.piId || m.piId !== client.piId) {
+					safeSend(client.socket, {
+						type: "error",
+						message: "queue_report 失败：piId 与连接绑定不一致",
+					});
+					return;
+				}
+				const text = (m.text ?? "").trim();
+				if (!text) return;
+				void feishu
+					.send({ title: `队列 · ${m.piId}`, body: text, piId: m.piId, event: "task_end" })
+					.catch((e) => {
+						log(
+							`[hub] queue_report 转发失败 piId=${m.piId}: ${e instanceof Error ? e.message : String(e)}`,
+						);
+					});
+				return;
+			}
 			case "lark_open": { const m = msg as Extract<PiToHubMessage, { type: "lark_open" }>; if (!client.piId || m.piId !== client.piId) { safeSend(client.socket, { type: "error", message: "lark 操作失败：piId 不一致" }); return; } if (!setupTask) setupTask = handleSetup(client).finally(() => { setupTask = null; }); else safeSend(client.socket, { type: "error", message: "已有扫码开局正在进行，请等待其结束" }); return; }
 			case "lark_reset": { const m = msg as Extract<PiToHubMessage, { type: "lark_reset" }>; if (!client.piId || m.piId !== client.piId) { safeSend(client.socket, { type: "error", message: "lark reset 失败：piId 不一致" }); return; } void (async () => { try { setupAbort?.abort(); await setupTask; nativeRuntimeStop?.(); nativeRuntimeStop = undefined; deleteCredentials(options.credentialsFile ?? credentialsPath()); resetNativeConfig({ configPath: hubConfigSnapshot?.configPath, base: hubConfigSnapshot }); allowed.clear(); hubConfigSnapshot = undefined; feishu = new NoopFeishuTransport(); hub.feishu = feishu; safeSend(client.socket, { type: "lark_result", ok: true, connected: false, reset: true, message: "飞书原生凭证、配置和主人绑定已清理" }); } catch (e) { safeSend(client.socket, { type: "lark_result", ok: false, connected: false, reset: true, message: e instanceof Error ? e.message : String(e) }); } })(); return; }
 			default:
@@ -860,6 +880,24 @@ export async function startHubServer(options: HubServerOptions = {}): Promise<Hu
 					? result.reply
 					: `目标 Pi ${result.approvalDeliver.piId} 连接不可用，审批结果未投递。`,
 				deliveredTo: delivered ? result.approvalDeliver.piId : null,
+				decision: result.decision,
+			};
+		}
+
+		if (result.queueControl) {
+			const qc = result.queueControl;
+			const delivered = sendToPi(qc.piId, {
+				type: "queue_control",
+				piId: qc.piId,
+				action: qc.action,
+				id: qc.id,
+			});
+			return {
+				ok: delivered,
+				reply: delivered
+					? result.reply
+					: `目标 Pi ${qc.piId} 连接不可用，队列指令未投递。`,
+				deliveredTo: delivered ? qc.piId : null,
 				decision: result.decision,
 			};
 		}

@@ -135,3 +135,18 @@ export function parseUseCommand(text: string): string | null {
 	if (!m) return null;
 	return m[2]!.trim();
 }
+
+export type QueueCommand =
+	| { action: "list" }
+	| { action: "clear" }
+	| { action: "cancel"; id: string };
+
+/** 解析队列查看/取消/清空；非该命令返回 null */
+export function parseQueueCommand(text: string): QueueCommand | null {
+	const t = text.trim();
+	if (/^(队列|queue)$/i.test(t)) return { action: "list" };
+	if (/^(清空队列|clear\s*queue|queue\s*clear)$/i.test(t)) return { action: "clear" };
+	const cancel = t.match(/^(取消|cancel)\s+(\S+)$/i);
+	if (cancel) return { action: "cancel", id: cancel[2]! };
+	return null;
+}

@@ -17,6 +17,11 @@
 
 诊断：在 Pi 执行 `/lark status`，或在飞书对机器人发送 `状态` / `status`，可查看脱敏后的版本、绑定、凭证落盘时间、在线 Pi、待审批数与修复建议。
 
+队列（当前默认 Pi 的 Bridge FIFO，不取消正在执行的任务）：
+
+- 飞书：`队列` / `取消 <id>` / `清空队列`
+- Pi：`/lark queue` · `/lark cancel <id>` · `/lark clear-queue`
+
 ## HTTP 控制面（本机）
 
 - 默认仅 loopback。可选环境变量 `PI_LARK_HUB_CONTROL_TOKEN`（或配置 `control.token`）：配置后除 `GET /health` 外需 `Authorization: Bearer <token>` 或 `X-Lark-Hub-Token`。

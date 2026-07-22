@@ -13,9 +13,11 @@ import type { InstanceRegistry } from "./registry.js";
 import {
 	formatOnlineList,
 	isListCommand,
+	parseQueueCommand,
 	parseUseCommand,
 	routePlainText,
 	routeUseCommand,
+	type QueueCommand,
 	type RouteDecision,
 } from "./router.js";
 import { formatHubStatusReport, isStatusCommand, type HubStatusSnapshot } from "./status-report.js";
@@ -38,11 +40,18 @@ export type ControlResult = {
 		decision: ApprovalDecision;
 		actorOpenId?: string;
 	};
+	/** 队列控制：应向 Pi 下发的 queue_control */
+	queueControl?: {
+		piId: string;
+		action: QueueCommand["action"];
+		id?: string;
+	};
 	/** 内部决策，便于测试与日志 */
 	decision:
 		| RouteDecision
 		| { kind: "list" }
 		| { kind: "status" }
+		| { kind: "queue"; action: QueueCommand["action"]; id?: string; piId: string }
 		| { kind: "reply"; piId: string; messageId: string }
 		| { kind: "reply_unbound"; messageId: string }
 		| { kind: "reply_offline"; piId: string; messageId: string }
@@ -128,6 +137,11 @@ export function handleControlMessage(
 			reply: formatHubStatusReport(ctx.getStatusSnapshot()),
 			decision: { kind: "status" },
 		};
+	}
+
+	const queueCmd = parseQueueCommand(text);
+	if (queueCmd) {
+		return handleQueueCommand(ctx, queueCmd, online, defaultPiId);
 	}
 
 	if (isListCommand(text)) {
@@ -235,6 +249,45 @@ function handleReplyRouting(
 			kind: "reply",
 			piId: binding.piId,
 			messageId: replyToMessageId,
+		},
+	};
+}
+
+function handleQueueCommand(
+	ctx: ControlContext,
+	cmd: QueueCommand,
+	online: InstanceSnapshot[],
+	defaultPiId: string | null,
+): ControlResult {
+	const decision = routePlainText({ online, defaultPiId });
+	if (decision.kind === "need_select") {
+		if (decision.reason === "default_offline") ctx.registry.setDefault(null);
+		return { reply: decision.reply, decision };
+	}
+	if (decision.kind !== "deliver") {
+		return {
+			reply: "无法确定目标 Pi，请先「使用 <piId>」。",
+			decision: { kind: "ignored", reason: "queue_no_target" },
+		};
+	}
+	if (decision.reason === "single_online") {
+		ctx.registry.setDefault(decision.piId);
+	}
+	const actionLabel =
+		cmd.action === "list" ? "查看队列" : cmd.action === "clear" ? "清空队列" : `取消 ${cmd.id}`;
+	return {
+		reply: `已向 ${decision.piId} 请求：${actionLabel}（结果将异步回复）`,
+		deliveredTo: decision.piId,
+		queueControl: {
+			piId: decision.piId,
+			action: cmd.action,
+			id: cmd.action === "cancel" ? cmd.id : undefined,
+		},
+		decision: {
+			kind: "queue",
+			action: cmd.action,
+			id: cmd.action === "cancel" ? cmd.id : undefined,
+			piId: decision.piId,
 		},
 	};
 }

@@ -39,6 +39,12 @@ export type ApprovalResultAckMessage = {
 	piId: string;
 	requestId: string;
 };
+/** Pi 回报队列操作结果，Hub 转发给飞书主人 */
+export type QueueReportMessage = {
+	type: "queue_report";
+	piId: string;
+	text: string;
+};
 export type RegisterOkMessage = { type: "register_ok"; piId: string };
 export type NotifyAckMessage = { type: "notify_ack"; requestId: string; messageId: string };
 export type UserMessage = {
@@ -70,6 +76,15 @@ export type LarkResultMessage = {
 	appId?: string;
 	message: string;
 };
+export type QueueControlAction = "list" | "cancel" | "clear";
+/** Hub 请求 Pi 查看/取消/清空本地 FIFO */
+export type QueueControlMessage = {
+	type: "queue_control";
+	piId: string;
+	action: QueueControlAction;
+	/** cancel 时的队列项 id 或前缀 */
+	id?: string;
+};
 
 export type PiToHubMessage =
 	| RegisterMessage
@@ -78,7 +93,8 @@ export type PiToHubMessage =
 	| UnregisterMessage
 	| LarkOpenMessage
 	| LarkResetMessage
-	| ApprovalResultAckMessage;
+	| ApprovalResultAckMessage
+	| QueueReportMessage;
 export type HubToPiMessage =
 	| RegisterOkMessage
 	| NotifyAckMessage
@@ -86,7 +102,8 @@ export type HubToPiMessage =
 	| ApprovalResultMessage
 	| ErrorMessage
 	| LarkChallengeMessage
-	| LarkResultMessage;
+	| LarkResultMessage
+	| QueueControlMessage;
 export type ProtocolMessage = PiToHubMessage | HubToPiMessage;
 
 export type InstanceSnapshot = {
@@ -150,6 +167,7 @@ const PI_TO_HUB_TYPES = new Set([
 	"lark_open",
 	"lark_reset",
 	"approval_result_ack",
+	"queue_report",
 ]);
 const HUB_TO_PI_TYPES = new Set([
 	"register_ok",
@@ -159,7 +177,9 @@ const HUB_TO_PI_TYPES = new Set([
 	"error",
 	"lark_challenge",
 	"lark_result",
+	"queue_control",
 ]);
+const QUEUE_CONTROL_ACTION = new Set<QueueControlAction>(["list", "cancel", "clear"]);
 
 const PI_STATUS = new Set<PiStatus>(["idle", "busy"]);
 const NOTIFY_EVENT = new Set<NotifyEvent>(["approval", "task_end"]);
@@ -396,6 +416,13 @@ function decodePiToHubObject(data: Record<string, unknown>): ProtocolDecodeResul
 				message: { type: "approval_result_ack", piId: piId!, requestId: requestId! },
 			};
 		}
+		case "queue_report": {
+			const piId = requireString(data, "piId", PROTOCOL_LIMITS.id);
+			if (isError(piId)) return piId;
+			const text = requireString(data, "text", PROTOCOL_LIMITS.body, { allowEmpty: true });
+			if (isError(text)) return text;
+			return { ok: true, message: { type: "queue_report", piId: piId!, text: text! } };
+		}
 		default:
 			return fail("unknown_type", `未知消息类型：${String(type)}`);
 	}
@@ -508,6 +535,21 @@ function decodeHubToPiObject(data: Record<string, unknown>): ProtocolDecodeResul
 			};
 			if (reset !== undefined) msg.reset = reset;
 			if (appId !== undefined) msg.appId = appId;
+			return { ok: true, message: msg };
+		}
+		case "queue_control": {
+			const piId = requireString(data, "piId", PROTOCOL_LIMITS.id);
+			if (isError(piId)) return piId;
+			const action = requireEnum(data, "action", QUEUE_CONTROL_ACTION);
+			if (isError(action)) return action;
+			const id = requireString(data, "id", PROTOCOL_LIMITS.id, { optional: true });
+			if (isError(id)) return id;
+			const msg: QueueControlMessage = {
+				type: "queue_control",
+				piId: piId!,
+				action: action!,
+			};
+			if (id !== undefined) msg.id = id;
 			return { ok: true, message: msg };
 		}
 		default:

@@ -74,6 +74,13 @@ describe("decodePiToHubMessage", () => {
 		assert.equal(r.ok, true);
 	});
 
+	it("接受 queue_report", () => {
+		const r = decodePiToHubMessage(
+			JSON.stringify({ type: "queue_report", piId: "a", text: "空" }),
+		);
+		assert.equal(r.ok, true);
+	});
+
 	it("合法 notify 含 actions", () => {
 		const r = decodePiToHubMessage(
 			JSON.stringify({
@@ -92,6 +99,17 @@ describe("decodePiToHubMessage", () => {
 });
 
 describe("decodeHubToPiMessage", () => {
+	it("接受 queue_control", () => {
+		const r = decodeHubToPiMessage(
+			JSON.stringify({ type: "queue_control", piId: "a", action: "cancel", id: "q1" }),
+		);
+		assert.equal(r.ok, true);
+		if (r.ok && r.message.type === "queue_control") {
+			assert.equal(r.message.action, "cancel");
+			assert.equal(r.message.id, "q1");
+		}
+	});
+
 	it("接受 register_ok / user_message / approval_result", () => {
 		assert.equal(decodeHubToPiMessage(JSON.stringify({ type: "register_ok", piId: "a" })).ok, true);
 		assert.equal(

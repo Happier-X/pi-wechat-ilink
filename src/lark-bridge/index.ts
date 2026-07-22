@@ -13,6 +13,7 @@
  * 命令：
  *   /lark                 连接或发起官方扫码
  *   /lark status          脱敏诊断（Hub/凭证/在线 Pi）
+ *   /lark queue|cancel|clear-queue  本地队列
  *   /lark reset           清理凭证并重新开局
  */
 
@@ -38,6 +39,7 @@ import {
 } from "./hub-autostart.js";
 import { NotifyAckQueue, type PendingNotifyPayload } from "./notify-queue.js";
 import { openPathBestEffort, writeSetupQrPng } from "./setup-qr.js";
+import { TaskQueue } from "./task-queue.js";
 
 const STATUS_KEY = "lark-bridge";
 const DEFAULT_HUB_URL = process.env.PI_LARK_HUB_URL ?? "ws://127.0.0.1:8765";
@@ -68,12 +70,6 @@ type PendingApproval = {
 	resolve: (decision: Decision) => void;
 	promise: Promise<Decision>;
 	done: boolean;
-};
-
-type QueuedTask = {
-	text: string;
-	source: string;
-	enqueuedAt: number;
 };
 
 type AssistantLikeMessage = {
@@ -130,7 +126,7 @@ export default function larkBridge(pi: ExtensionAPI) {
 	let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 	let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-	const queue: QueuedTask[] = [];
+	const taskQueue = new TaskQueue({ maxSize: 20 });
 	let currentFromHub = false;
 	let drainingQueue = false;
 	/** agent_end 缓存的助手摘要，settled 时用于 task_end */
@@ -220,8 +216,8 @@ export default function larkBridge(pi: ExtensionAPI) {
 
 		drainingQueue = true;
 		try {
-			while (queue.length > 0 && ctx.isIdle() && !currentFromHub) {
-				const item = queue.shift()!;
+			while (taskQueue.size > 0 && ctx.isIdle() && !currentFromHub) {
+				const item = taskQueue.shift()!;
 				try {
 					currentFromHub = true;
 					status(`飞书指令：${item.text.slice(0, 50)}`);
@@ -247,9 +243,13 @@ export default function larkBridge(pi: ExtensionAPI) {
 
 		const slotBusy = currentFromHub || drainingQueue;
 		if (!ctx.isIdle() || slotBusy) {
-			queue.push({ text, source: msg.source, enqueuedAt: Date.now() });
-			status(`飞书已排队：${queue.length}`);
-			notify(`飞书消息已加入队列（第 ${queue.length} 条）`, "info");
+			const item = taskQueue.enqueue({ text, source: msg.source });
+			if (!item) {
+				notify(`飞书队列已满（${taskQueue.max}），消息未入队`, "warning");
+				return;
+			}
+			status(`飞书已排队：${taskQueue.size}`);
+			notify(`飞书消息已入队 ${item.id}（${taskQueue.size}/${taskQueue.max}）`, "info");
 			return;
 		}
 
@@ -324,6 +324,18 @@ export default function larkBridge(pi: ExtensionAPI) {
 			}
 			case "user_message": {
 				if (activeCtx) handleUserMessage(msg, activeCtx);
+				return;
+			}
+			case "queue_control": {
+				const report = applyQueueControl(msg.action, msg.id);
+				notify(report, "info");
+				if (piId) {
+					send({
+						type: "queue_report",
+						piId,
+						text: report,
+					});
+				}
 				return;
 			}
 			case "approval_result": {
@@ -519,7 +531,7 @@ export default function larkBridge(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async () => {
-		queue.length = 0;
+		taskQueue.clear();
 		drainingQueue = false;
 		currentFromHub = false;
 		pendingAssistantSummary = "";
@@ -683,6 +695,23 @@ export default function larkBridge(pi: ExtensionAPI) {
 		};
 	});
 
+	const applyQueueControl = (
+		action: "list" | "cancel" | "clear",
+		id?: string,
+	): string => {
+		const busyHint = currentFromHub || drainingQueue ? "当前有任务执行中" : undefined;
+		if (action === "list") return taskQueue.formatList(busyHint);
+		if (action === "clear") {
+			const n = taskQueue.clear();
+			status(taskQueue.size > 0 ? `飞书已排队：${taskQueue.size}` : undefined);
+			return `已清空待执行队列（${n} 条）`;
+		}
+		const r = taskQueue.cancel(id ?? "");
+		if (!r.ok) return r.reason;
+		status(taskQueue.size > 0 ? `飞书已排队：${taskQueue.size}` : undefined);
+		return `已取消 ${r.item.id}：${r.item.text.slice(0, 40)}`;
+	};
+
 	const reportLocalStatus = async () => {
 		const origin = hubUrlToHttpOrigin(DEFAULT_HUB_URL);
 		const health = origin ? await fetchHubHealthDetail(origin, 1500) : null;
@@ -690,7 +719,7 @@ export default function larkBridge(pi: ExtensionAPI) {
 			"【Bridge 本机】",
 			`WS连接=${connected ? "是" : "否"}  piId=${piId ?? "（未注册）"}`,
 			`Hub URL=${DEFAULT_HUB_URL}`,
-			`队列=${queue.length}  本地待审批=${[...approvals.values()].filter((a) => !a.done).length}`,
+			`队列=${taskQueue.size}/${taskQueue.max}  本地待审批=${[...approvals.values()].filter((a) => !a.done).length}`,
 			`notify待确认=${notifyAckQueue.size()}`,
 		];
 		if (!health) {
@@ -726,16 +755,34 @@ export default function larkBridge(pi: ExtensionAPI) {
 	};
 
 	pi.registerCommand("lark", {
-		description: "连接飞书原生运行时；/lark status 诊断；/lark reset 清理后重扫码",
+		description:
+			"连接飞书；status 诊断；queue/cancel/clear-queue 队列；reset 清理",
 		handler: async (args, ctx) => {
 			activeCtx = ctx;
-			const arg = (args ?? "").trim().toLowerCase();
+			const raw = (args ?? "").trim();
+			const arg = raw.toLowerCase();
 			if (arg === "status" || arg === "诊断") {
 				await reportLocalStatus();
 				return;
 			}
+			if (arg === "queue" || arg === "队列") {
+				notify(applyQueueControl("list"), "info");
+				return;
+			}
+			if (arg === "clear-queue" || arg === "清空队列") {
+				notify(applyQueueControl("clear"), "info");
+				return;
+			}
+			const cancelMatch = raw.match(/^(cancel|取消)\s+(\S+)$/i);
+			if (cancelMatch) {
+				notify(applyQueueControl("cancel", cancelMatch[2]), "info");
+				return;
+			}
 			if (arg && arg !== "reset") {
-				notify("用法：/lark | /lark status | /lark reset", "warning");
+				notify(
+					"用法：/lark | status | queue | cancel <id> | clear-queue | reset",
+					"warning",
+				);
 				return;
 			}
 			if (!connected || !piId) {
