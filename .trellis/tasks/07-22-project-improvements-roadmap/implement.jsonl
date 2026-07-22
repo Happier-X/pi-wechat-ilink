@@ -1,0 +1,6 @@
+{"file":".trellis/spec/backend/multi-pi-lark-hub.md","reason":"协议、路由、出站与审批合约，路线图必须与其一致。"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"fail-closed、脱敏与开局/出站错误边界。"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"远程文本禁止 followUp、TUI 安全与 typecheck 要求。"}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Hub/Bridge 日志边界与禁止记录 secret。"}
+{"file":".trellis/tasks/07-22-project-improvements-roadmap/research/reliability-security-protocol-test-gaps.md","reason":"P0/P1 可靠性与测试缺口证据。"}
+{"file":".trellis/tasks/07-22-project-improvements-roadmap/research/ux-feature-opportunities.md","reason":"UX MVP 与验收边界。"}
